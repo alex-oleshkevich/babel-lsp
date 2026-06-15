@@ -1,5 +1,16 @@
 # Agent Instructions
 
+## Specifications
+
+This project is spec-driven — the docs in `specs/` are the source of truth for what to build and why.
+
+- **Start at `specs/index.md`** — the map of every spec. Read it first.
+- **Load specs on demand** — from the index, open only the spec(s) relevant to your task; don't load the whole suite into context.
+- **Spec-first for new features** — before building a new feature, create its spec (copy `specs/features/F00-template.md`), get it reviewed, then implement.
+- **Keep specs in sync** — when you change a feature's behavior, update its spec in the same change. Specs must not drift from code.
+
+## Issue Tracking
+
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
 ## Quick Reference

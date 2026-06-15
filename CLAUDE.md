@@ -2,6 +2,10 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
+## Specifications
+
+This project is spec-driven. See **AGENTS.md › Specifications** — start at `specs/index.md`, load specs on demand, and create a spec before building any new feature.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
 
