@@ -23,6 +23,15 @@ bd close <id>         # Complete work
 bd dolt push          # Push beads data to remote
 ```
 
+## Task Workflow (per issue)
+
+For each task, follow this sequence — no shortcuts:
+
+1. **Implement** — write the code for the task
+2. **Tests** — write unit tests, then e2e tests; run them all and ensure they pass
+3. **Self-review** — run `/self-review` and address any findings
+4. **Commit** — commit the work, then move to the next task
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
