@@ -1,11 +1,17 @@
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
 use dashmap::DashMap;
 use ropey::Rope;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tower_lsp_server::ls_types::Uri;
+
+use crate::config::Config;
 
 pub struct DocumentState {
     pub rope: Rope,
@@ -16,6 +22,9 @@ pub struct WorkspaceState {
     pub documents: DashMap<Uri, DocumentState>,
     doc_locks: DashMap<Uri, Arc<Mutex<()>>>,
     utf8_encoding: AtomicBool,
+    pub workspace_root: OnceLock<PathBuf>,
+    pub config: Config,
+    pub catalog_files: RwLock<Vec<PathBuf>>,
 }
 
 impl WorkspaceState {
@@ -24,6 +33,9 @@ impl WorkspaceState {
             documents: DashMap::new(),
             doc_locks: DashMap::new(),
             utf8_encoding: AtomicBool::new(false),
+            workspace_root: OnceLock::new(),
+            config: Config::default(),
+            catalog_files: RwLock::new(vec![]),
         }
     }
 
