@@ -37,7 +37,8 @@ babel-lsp is a Rust language server for Python Babel internationalization. The s
 | [E03-tech-stack](foundations/E03-tech-stack.md) | Dependencies, toolchain, versions | Touching dependencies | ✏️ |
 | [E07-data-model](foundations/E07-data-model.md) | Catalog index and document state | Touching shared state | ✏️ |
 | [E15-app-config](foundations/E15-app-config.md) | Config sources, locale discovery, rule toggles | Reading or adding a setting | ✏️ |
-| [E17-testing](foundations/E17-testing.md) | Unit + e2e harness | Writing tests | ✏️ |
+| [E17-testing](foundations/E17-testing.md) | Coverage policy, categories, fixtures registry | Writing a feature test plan | ✏️ |
+| [E29-e2e-testing](foundations/E29-e2e-testing.md) | E2E coverage policy, pytest-lsp harness, patterns | Writing a feature E2E plan | ✏️ |
 
 ## Tier 4 — Features
 
@@ -85,5 +86,6 @@ When you author or change a spec, update its row here in the same edit. When a s
 
 ## Changelog
 
+- **2026-06-15** — Adopted the updated spec-writer structure: new [E29-e2e-testing](foundations/E29-e2e-testing.md) foundation; restructured [E17-testing](foundations/E17-testing.md) into a coverage policy + fixtures registry; constitution §4.4 Testing and §4.6 non-functional scope (Security required; Accessibility N/A — editor renders, content rule in §6; Acceptance Enabled; the rest N/A). Every feature spec (F01–F16) gained §11 Testing and §13.1 Security & Privacy; surface-bearing features gained §6 UI Mockups; user-facing features gained §12 E2E + §12.3 acceptance. No §13.2 — accessibility is the editor's.
 - **2026-06-15** — Open-question resolution pass: decided 13 OQs across E01/E03/E15/F02/F03/F07/F13/F14/F15/F16 — stdio-only transport, `tree-sitter-jinja2`, `check --fix` + `stats`, structured Jinja placeholders, and the PyPI/AUR/Homebrew release (macOS unsigned, no crates.io). Three F11 hardcoded-strings OQs remain deferred. Also added the E17 e2e coverage matrix (REQ-TST-07/08), F01 external-change detection (REQ-CAT-09/10), the F03 lint provenance column, and F05 hover mockups. Bumped the touched specs.
 - **2026-06-15** — Initial index: two meta docs, two product docs, six foundations, and sixteen feature specs (F01–F16) plus the template.

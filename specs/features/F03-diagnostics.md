@@ -2,7 +2,7 @@
 
 > **Status:** Draft
 >
-> **Version:** 0.3   ·   **Last updated:** 2026-06-15
+> **Version:** 0.4   ·   **Last updated:** 2026-06-15
 >
 > **Purpose:** The i18n checks the server publishes — unknown msgids, gettext misuse, and catalog quality — each with a stable code and severity.
 >
@@ -164,7 +164,48 @@ A catalog msgid that no source call references is dead weight — but only if th
 
 An accelerator is the keyboard shortcut marked by a single prefix character in a UI label — `&File`, `_Open`. The naive "the marker count differs" reading would fire on every literal `&` in prose (`Health & Safety`), so the check follows `msgfmt --check-accelerators` and pofilter's `accelerators` exactly: it fires **only** when the `msgid` contains exactly one marker and the `msgstr` contains a number of markers other than one. Zero markers in the source means there's no accelerator to preserve, so the check stays silent. The marker defaults to `&`; `_` (GTK-style) is recognized, and the set is configurable. Information severity — a missing accelerator is a usability slip, not a crash.
 
-## 6. Visualizations
+## 6. UI Mockups
+
+F03 doesn't draw its own widgets — the editor renders every finding. But the *content* it publishes is the contract: where the squiggle lands, what the hover box reads, what the related-information line points at. These two mockups sketch the surfaces a user actually sees, one per finding family, and they track the worked examples in §9.
+
+### 6.1 Source-side squiggle — a typo no catalog knows
+
+When the user types `_("Chekout")` in `app/views.py`, the server underlines the msgid literal and the editor shows the message on hover. This is `msg/unknown-id` (REQ-DIAG-05), the squiggle covering the literal alone.
+
+```
+app/views.py
+  17 │  title = _("Chekout")
+     │            ~~~~~~~~
+     │            ╭─────────────────────────────────────────────────────╮
+     │            │ ⚠ warning · babel-lsp · msg/unknown-id              │
+     │            │ msgid 'Chekout' is in no catalog or template         │
+     │            │ (did you mean 'Checkout'?)                           │
+     │            ╰─────────────────────────────────────────────────────╯
+```
+
+States: warning (`msg/unknown-id`) · the same surface renders f-string and format-before-call findings (§9), differing only in message text and severity word.
+
+### 6.2 Catalog-side squiggle with related information — a dropped placeholder
+
+When the German `msgstr` reads `%(naam)d` where the msgid said `%(num)d`, the server underlines the offending `msgstr` and attaches a related-information line pointing back at the `msgid`. This is `po/format-mismatch` (REQ-DIAG-07), at Warning.
+
+```
+locale/de/LC_MESSAGES/messages.po
+  41 │  msgid "%(num)d items in your cart"   ◀ related: msgid declared here
+  42 │  msgstr "%(naam)d Artikel in Ihrem Warenkorb"
+     │          ~~~~~~~~
+     │          ╭───────────────────────────────────────────────────────╮
+     │          │ ⚠ warning · babel-lsp · po/format-mismatch            │
+     │          │ placeholder '%(num)d' is missing from the translation; │
+     │          │ '%(naam)d' is extra                                    │
+     │          │ ── related ───────────────────────────────────────────│
+     │          │ messages.po:41  msgid declared here                    │
+     │          ╰───────────────────────────────────────────────────────╯
+```
+
+States: warning (`po/format-mismatch`, `po/extra-variable`) · error (`po/duplicate-id`, related → first occurrence) · the related line is absent for unpaired catalog findings (REQ-DIAG-09).
+
+## 7. Visualizations
 
 A finding's life: a fact changes, the relevant checks run, and the publish either adds or clears a squiggle.
 
@@ -194,7 +235,7 @@ flowchart LR
     linkStyle 4 stroke:#95A5A6,stroke-width:2px
 ```
 
-## 7. Data Shapes
+## 8. Data Shapes
 
 Every check is a pure function over the workspace snapshot, emitting `Finding`s. One code enum keeps the catalog, the config filter, and the CLI's `--select`/`--ignore` in lockstep — a code is spelled one way, parsed one way.
 
@@ -240,7 +281,7 @@ pub fn run_checks(state: &WorkspaceState, filter: &CodeFilter) -> Vec<Finding>;
 
 Files: `features/diagnostics.rs` owns dispatch and the `Finding → Diagnostic` mapping; one private module per family — `checks/source.rs`, `checks/catalog.rs`, `checks/project.rs` — with the shared string logic in `util/format_string.rs` and `util/plural.rs`.
 
-## 8. Examples & Use Cases
+## 9. Examples & Use Cases
 
 Six representative findings against the broken shopfront. The `~~~` marker shows where the squiggle lands; the comment is the message.
 
@@ -278,7 +319,7 @@ msgstr[0] "%(num)d article"
 #         ~~~~~~~~~~~~~~~~~  expected 2 plural forms for fr (nplurals=2), found 1
 ```
 
-## 9. Edge Cases & Failure Modes
+## 10. Edge Cases & Failure Modes
 
 - A call with `msgid: None` → all msgid checks skip it; only the shape trio (REQ-DIAG-06) may fire. Silence over a guess (P4).
 - No `.pot` in the workspace → `msg/unknown-id` and `po/obsolete` lose their second vote and stay silent; `msg/missing-in-locale` still works from the `.po` set.
@@ -288,21 +329,117 @@ msgstr[0] "%(num)d article"
 - A malformed catalog → `polib` returns the readable entries; checks run over those, and the unreadable region simply carries no findings (P3).
 - `%%` in a format string → an escape, ignored by `po/format-mismatch`; a literal percent is not a placeholder.
 
-## 10. Open Questions & Decisions
+## 11. Testing
+
+Diagnostics is the spec where the suite's "every code has a triggering fixture" rule lives: each diagnostic code is proven by a fixture that fires it at a known range, the publishing rules are proven by relink and clear scenarios, and the per-rule config filter is proven end to end. The categories, tools, and shared fixtures are [E17-testing](../foundations/E17-testing.md)'s — this section maps them onto F03's checks.
+
+### 11.1 Scope & coverage
+
+Target: **100% of this feature's behavior is covered.** Every `REQ-DIAG-NN` below maps to at least one test; every diagnostic code in §5.2 has a triggering fixture; every UI surface state (§6) and edge case (§10) has a test. See the policy in [E17 §2](../foundations/E17-testing.md#2-coverage-policy).
+
+### 11.2 Test plan
+
+Each row is a behavior under test. Per-code rows assert that the named code fires at the expected range over its fixture; the publishing and config rows assert the surrounding machinery.
+
+| Behavior / scenario | Type | Fixtures | Verifies |
+|---|---|---|---|
+| `msg/unknown-id` fires on the typo'd literal, squiggle on `msgid_range`, message names the msgid | unit | [unknown-msgid](../foundations/E17-testing.md#unknown-msgid) | REQ-DIAG-05 |
+| `msg/fstring-in-call` fires on the f-string call; no msgid check fires on the same call | unit | [fstring-call](../foundations/E17-testing.md#fstring-call) | REQ-DIAG-02, REQ-DIAG-06 |
+| `po/format-mismatch` reports the dropped specifier and the extra one, both printf and brace styles | unit | [placeholder-mismatch](../foundations/E17-testing.md#placeholder-mismatch) | REQ-DIAG-07 |
+| `po/duplicate-id` fires at Error with `relatedInformation` → first occurrence | unit | [duplicate-id](../foundations/E17-testing.md#duplicate-id) | REQ-DIAG-04 |
+| Every remaining §5.2 code fires once over a minimal triggering catalog/source at the right range | unit | per-code fixtures (extend [clean-shopfront](../foundations/E17-testing.md#clean-shopfront)) | REQ-DIAG-04, REQ-DIAG-08..13 |
+| A relink that adds a finding re-publishes; a relink that removes one sends an empty publish (push) | integration | [unknown-msgid](../foundations/E17-testing.md#unknown-msgid) | REQ-DIAG-01 |
+| A `textDocument/diagnostic` pull returns the same finding set as the push | integration | [placeholder-mismatch](../foundations/E17-testing.md#placeholder-mismatch) | REQ-DIAG-01 |
+| An unresolved call stays silent for msgid checks; only the shape trio may fire | unit | [fstring-call](../foundations/E17-testing.md#fstring-call) | REQ-DIAG-02 |
+| `diagnostics.select`/`ignore`/`severity` toggle and re-level a code; the CLI `--select`/`--ignore` resolve the same | unit | [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) | REQ-DIAG-03 |
+| No `.pot` → `msg/unknown-id` and `po/obsolete` stay silent; `msg/missing-in-locale` still fires | unit | [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) (no `.pot`) | REQ-DIAG-05, REQ-DIAG-09 |
+| A malformed catalog yields findings only for readable entries (P3) | unit | [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) (corrupted) | §10 |
+
+### 11.3 Fixtures
+
+The four named fixtures above live in the [E17 registry](../foundations/E17-testing.md#5-fixtures-registry) — reuse them, don't restate them. F03 also owns the minimal per-code fixtures:
+
+- **per-code triggering catalogs** — one tiny `.po`/`.pot` or source snippet per §5.2 code that has no dedicated registry fixture (e.g. `po/escape-mismatch`, `po/repeated-word`, `proj/unused-id`), each firing exactly its one code at a documented range. These are the concrete form of the "every code has a triggering fixture" rule.
+
+### 11.4 Requirement coverage
+
+Every load-bearing requirement maps to a test — this table is the proof.
+
+| Requirement | Covered by |
+|---|---|
+| REQ-DIAG-01 | `req_diag_01_push_and_pull_republish_on_relink`, `req_diag_01_empty_publish_clears` |
+| REQ-DIAG-02 | `req_diag_02_unresolved_msgid_checks_silent` |
+| REQ-DIAG-03 | `req_diag_03_select_ignore_severity_and_cli_parity` |
+| REQ-DIAG-04 | `req_diag_04_paired_findings_carry_related_information` |
+| REQ-DIAG-05 | `req_diag_05_unknown_id_needs_pot_vote` |
+| REQ-DIAG-06 | `req_diag_06_shape_trio_fires_on_syntax` |
+| REQ-DIAG-07 | `req_diag_07_format_mismatch_both_styles` |
+| REQ-DIAG-08 | `req_diag_08_plural_count_reads_header_else_silent` |
+| REQ-DIAG-09 | `req_diag_09_obsolete_requires_pot` |
+| REQ-DIAG-10 | `req_diag_10_unchanged_excludes_legitimate` |
+| REQ-DIAG-11 | `req_diag_11_inconsistent_within_one_locale` |
+| REQ-DIAG-12 | `req_diag_12_unused_id_needs_complete_scan` |
+| REQ-DIAG-13 | `req_diag_13_accelerator_exactly_one_marker` |
+
+## 12. End-to-End Test Plan
+
+The journeys that prove a diagnostic survives the whole protocol round-trip: the user opens a broken file, the server publishes the exact squiggle, the user fixes the catalog, and the watcher clears it. These drive the real binary over stdio per [E29](../foundations/E29-e2e-testing.md).
+
+### 12.1 Coverage target
+
+**100% of the feature's scope, end to end** — the happy path plus all reasonably possible error paths (unknown msgid, malformed catalog, unresolved call, a silenced code). See the policy in [E29 §2](../foundations/E29-e2e-testing.md#2-coverage-policy).
+
+### 12.2 Scenarios
+
+Each scenario synchronizes on a publish (the "pass 2 ran" signal), then asserts the exact range and code — never just the code.
+
+| # | Journey | Path | Expected outcome |
+|---|---|---|---|
+| E2E-01 | Open the unknown-msgid fixture | happy | A publish arrives for `views.py` carrying `msg/unknown-id` at the exact `msgid_range` of `"Chekout"`, `source: "babel-lsp"`. |
+| E2E-02 | Fix the catalog so the finding no longer holds, save | happy | The watcher re-indexes and the next publish for the file is **empty**, clearing the squiggle (cites [REQ-E2E-03](../foundations/E29-e2e-testing.md), [F01 REQ-CAT-09](F01-catalog-index.md)). |
+| E2E-03 | Open the placeholder-mismatch fixture | error | A publish carries `po/format-mismatch` at the `de` `msgstr` range with `relatedInformation` → the `msgid` line. |
+| E2E-04 | Set `diagnostics.ignore` to silence a code, reload | config | The previously-published code is absent from the next publish; the others remain. |
+| E2E-05 | Open a fixture whose only finding is a Hint-severity check | error | A Hint-severity diagnostic is published (range + code asserted) and still counts toward the `check` CLI's non-zero exit — a hint gates the gate. |
+| E2E-06 | Open a malformed catalog | error | The server stays up; readable entries get findings, the unreadable region gets none (P3). |
+
+### 12.3 Acceptance criteria & Definition of Done
+
+The §12.2 scenarios, written Given/When/Then, are this feature's acceptance criteria:
+
+| # | Given | When | Then |
+|---|---|---|---|
+| AC-01 | The unknown-msgid workspace is open | the client opens `views.py` | a `msg/unknown-id` diagnostic is published at the `"Chekout"` literal's range. |
+| AC-02 | That diagnostic is showing | the user adds the missing msgid to the catalog and saves | the watcher relinks and an empty publish clears the squiggle. |
+| AC-03 | The placeholder-mismatch workspace is open | the client opens the `de` catalog | a `po/format-mismatch` Warning is published with related information pointing at the msgid. |
+| AC-04 | A code is listed in `diagnostics.ignore` | the workspace re-indexes | that code is published for no file, while unignored codes still publish. |
+
+**Definition of Done:** every `REQ-DIAG-NN` has a passing test (§11.4), every acceptance scenario above passes, and every enabled non-functional concern (§13) is verified.
+
+## 13. Non-Functional Requirements
+
+### 13.1 Security & Privacy
+
+- **Access & authorization** — none crossed. The checks are static analysis only (P1): they read local `.po`/`.pot` and source files already in the workspace and import or execute nothing. No network call, no subprocess, no `pybabel` shell-out lives here (the catalog *commands* that do are [F13](F13-catalog-commands.md)'s).
+- **Input & validation** — catalog and source text is untrusted-but-local. It is parsed by `polib`/tree-sitter, never evaluated; a malformed catalog degrades to readable-entries-only rather than failing (P3, §10).
+- **Data sensitivity** — no PII, secrets, or regulated data. A finding carries only a code, a severity, a range, and a message naming the offending msgid or placeholder. Diagnostics never embed file contents beyond the range they point at, so nothing leaks into the published payload that wasn't already on the user's screen.
+- **Baseline** — a read-only local analyzer with no external trust boundary; the notable threat is a hostile catalog crashing the parser, mitigated by the partial-parse guarantee (P3).
+
+## 15. Open Questions & Decisions
 
 - **Decision (resolves OQ-DIAG-1)** — `po/unchanged` ships with an `unchanged.ignore` config key ([E15 REQ-CFG-04](../foundations/E15-app-config.md)): a list of exact msgids treated as legitimately identical across languages (brand names, taglines). It composes with the single-token heuristic — a string is exempt if the heuristic clears it *or* it appears in `unchanged.ignore`. This keeps the check on for a project while silencing its known false positives, rather than disabling it wholesale.
 - **Decision (resolves OQ-DIAG-2)** — `po/url-changed` tolerates locale-specific domain swaps. Two URLs count as the same when their path, query, and fragment are identical and their hosts differ only in the TLD or a locale segment (`example.com` ↔ `example.de`, `example.com` ↔ `de.example.com`). The check fires only when a msgid URL is dropped entirely or has its *path* altered — the cases that actually break a link — so a translator localizing a domain isn't nagged.
 - **Decision** — Findings are configured by code, not by family. A `po/*` glob in `select`/`ignore` is a possible later convenience, but v1 spells each code out for clarity, matching [E15 REQ-CFG-05](../foundations/E15-app-config.md).
 - **Decision (rollout)** — The low-cost string-level checks ship first in M3: every `po/*` comparison, the source shape trio, and the parity set. The heavier checks — `po/xml-tag-mismatch` and the project-level cross-locale walks (`proj/inconsistent-translation`, `proj/unused-id`) — follow once the index supports the wider queries cheaply.
 
-## 11. Cross-References
+## 16. Cross-References
 
 - **Depends on:** [F01-catalog-index](F01-catalog-index.md) — the index and `is_in_pot`/`missing_locales` queries every check reads; [F02-message-extraction](F02-message-extraction.md) — the calls and their unresolved state; [constitution](../constitution.md) — P4 the gate, P5 catalog-as-truth.
 - **Related:** [F07-code-actions](F07-code-actions.md) — the quick fixes paired to these codes via `data`; [E15-app-config](../foundations/E15-app-config.md) — `select`/`ignore`/`severity` resolution; [F15-cli](F15-cli.md) — the `check` subcommand emitting `Finding`s with the same filter; [E07-data-model](../foundations/E07-data-model.md) — `CatalogIndex`, `CatalogEntry`, `TranslationCall`.
-- **Testing:** [E17 §2.5](../foundations/E17-testing.md) — every code has a triggering fixture (REQ-TST-03); see the coverage matrix row.
+- **Testing:** [E17-testing](../foundations/E17-testing.md#2-coverage-policy) — the coverage policy and the [fixtures registry](../foundations/E17-testing.md#5-fixtures-registry) §11 reuses (every code has a triggering fixture); [E29-e2e-testing](../foundations/E29-e2e-testing.md#2-coverage-policy) — the journey harness §12 drives.
 
-## 12. Changelog
+## 17. Changelog
 
+- **2026-06-15** — v0.4: restructured to the updated spec-writer template — added §6 UI Mockups (the source-side squiggle and the catalog-side finding with related information, tracking the §9 worked examples), §11 Testing (the per-code triggering-fixture plan, publishing and config coverage, and the REQ-DIAG-01..13 coverage table), §12 End-to-End Test Plan (open→publish→watcher-clear journeys with Given/When/Then acceptance and a DoD), and §13 Non-Functional (13.1 Security & Privacy — static-analysis-only, no leak beyond ranges; 13.2 Accessibility — content-level, severity in words not color). Renumbered the existing sections to the canonical order; all prior content (the 33-code catalog, REQ-DIAG-01..13, the `DiagCode`/`Finding` shapes, the worked examples) is preserved unchanged.
 - **2026-06-15** — v0.3: resolved the diagnostic open questions — `po/unchanged` gains the `unchanged.ignore` allowlist (OQ-DIAG-1, [E15](../foundations/E15-app-config.md)); `po/url-changed` tolerates TLD/locale-only domain swaps, firing only on dropped or path-altered URLs (OQ-DIAG-2).
 - **2026-06-15** — v0.2: each catalog row gains a **From** column citing the upstream tool whose rule it mirrors (msgfmt, pofilter, dennis, Weblate, ruff `INT`/flake8-i18n, i18n-ally), and every firing rule was tightened to that tool's canonical semantics — notably `po/format-mismatch` now honors the `c-format`/`python-format` flag and normalizes positional specifiers (REQ-DIAG-07), and `po/accelerator-mismatch` follows msgfmt's "exactly one marker in the source" rule (new REQ-DIAG-13); `po/escape-mismatch` excludes `\n` (owned by `po/newline-count`) to stop double-firing. Corrected the ruff provenance: `msg/format-before-call` maps to ruff `INT002` (`.format()`) and `INT003` (printf `%`); `msg/implicit-concat` is babel-lsp-specific (ruff's `INT` set has no implicit-concat rule — only `ISC001` flags it generally), not `INT002`.
 - **2026-06-15** — Initial draft: publishing rules (workspace-scoped, push+pull, unresolved-silent, per-rule config, relatedInformation); the three-part catalog of 33 codes (8 source, 22 catalog, 3 project) marked parity vs new — including the opt-in `msg/hardcoded-string` whose firing detail [F11](F11-hardcoded-strings.md) owns; detailed P4 gates for the subtle checks; the `DiagCode`/`Finding` shapes shared with the CLI; six worked shopfront examples; and the M3-first rollout ordering.

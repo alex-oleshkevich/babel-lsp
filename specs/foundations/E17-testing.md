@@ -2,11 +2,11 @@
 
 > **Status:** Draft
 >
-> **Version:** 0.2   ·   **Last updated:** 2026-06-15
+> **Version:** 0.3   ·   **Last updated:** 2026-06-15
 >
-> **Purpose:** How the server is tested — Rust unit tests for the pure logic, and a real-client e2e harness driving the binary against fixture workspaces.
+> **Purpose:** How babel-lsp is tested — the coverage policy, the test categories, the tools, and the shared fixtures every feature reuses. Each feature's own plan lives in its spec's §11 and links here.
 >
-> **Depends on:** [E01-architecture](E01-architecture.md), [E02-folder-structure](E02-folder-structure.md)   ·   **Related:** [F03-diagnostics](../features/F03-diagnostics.md), [F15-cli](../features/F15-cli.md)
+> **Depends on:** [constitution](../constitution.md), [E02-folder-structure](E02-folder-structure.md)   ·   **Related:** [E29-e2e-testing](E29-e2e-testing.md), [E03-tech-stack](E03-tech-stack.md)
 
 > Requirement tag: **TST**
 
@@ -14,81 +14,116 @@
 
 ## 1. Purpose & Scope
 
-This spec defines the two test layers and the fixtures they share. It's the contract every feature spec's "how it's tested" note points back to.
+This spec defines how the whole server is tested and what "tested" means here. It is the authority every feature's **Testing** section (§11) defers to.
 
-## 2. Detailed Specification
+This spec covers:
 
-### 2.1 Two layers
+- The coverage policy every feature must meet.
+- The categories of test — unit and integration — and when to use each.
+- The tools the suite standardizes on, including how external tools are faked.
+- The shared **fixtures registry** — the shopfront workspaces, defined once and linked everywhere.
+- Requirement-traceability conventions.
 
-**REQ-TST-01 — Unit tests for pure logic, e2e tests for protocol behavior.**
+Out of scope: end-to-end protocol journeys, which have their own foundation — see [E29-e2e-testing](E29-e2e-testing.md).
 
-Pure functions — msgid extraction, the path-to-`(locale, domain)` rule, placeholder comparison, plural counting, PO range math — are tested as Rust unit tests beside their code. Anything that crosses the LSP boundary — capability negotiation, diagnostics publishing, hover content, code-action edits — is tested end to end through a real client against the built binary.
+## 2. Coverage Policy
 
-**REQ-TST-02 — The e2e harness is `pytest-lsp`.**
+The non-negotiable bar every feature is written against.
 
-The end-to-end suite drives the server with `pytest-lsp`, which speaks real JSON-RPC over stdio. Each test opens a fixture workspace, sends requests, and asserts on responses — the same path an editor takes. This catches the integration bugs unit tests can't: wrong capability flags, off-by-encoding ranges, notifications applied out of order.
+**REQ-TST-01 — Every feature is 100% covered.**
 
-### 2.2 Fixtures
+Each feature ships a test plan (its spec's §11) covering **all of its behavior**: every `REQ-<TAG>-NN` maps to at least one test, and every editor-surface state (§6) and edge case (§10) has a test. A feature with uncovered behavior is not done.
 
-**REQ-TST-03 — Fixtures are the shopfront, broken on purpose.**
+**REQ-TST-02 — Coverage is traceable, not just numeric.**
 
-The fixture corpus is the constitution's shopfront app and variants of it: a clean copy, a copy with a typo'd msgid, one with a placeholder mismatch in the German catalog, one with a duplicate `msgid`, one with an f-string in `_()`. Each diagnostic in [F03](../features/F03-diagnostics.md) has a fixture that triggers it at a known position, so a test can assert the exact range and code.
+Coverage is demonstrated by the requirement-coverage table in each feature's §11.4, not only a line-coverage percentage. A green percentage with an untested requirement still fails the bar. Each feature's §11.4 is the index from a `REQ-<TAG>-NN` to the test that proves it.
 
-A dedicated **non-ASCII fixture** — catalogs full of multi-byte translations — pins the position-encoding edge cases from [E01 REQ-ARCH-09](E01-architecture.md): a hover range must land on the right character whether the client negotiated UTF-8 or UTF-16.
+## 3. Test Categories
 
-### 2.3 Protocol conformance
+Two categories live here; protocol journeys live in [E29](E29-e2e-testing.md).
 
-**REQ-TST-04 — Lifecycle, ordering, and cancellation are tested.**
+| Category | Use it for | Speed / scope |
+|---|---|---|
+| **Unit** | Pure logic with no I/O — msgid extraction, the path-to-`(locale, domain)` rule, placeholder comparison, plural counting, PO range/escape math. Rust `#[cfg(test)]` modules beside the code. | Fast, isolated. |
+| **Integration** | Several layers wired together without the LSP boundary — discovery → `polib` load → index build → a feature's pure-function read. Asserts the two-pass pipeline produces the right `CatalogIndex`. | Slower, in-process. |
 
-The harness asserts the protocol conduct from [E01 §5.6](E01-architecture.md): a newly opened file always receives a publish (the "pass 2 ran" signal), a relink that clears a finding sends an empty publish, two rapid `didChange` events apply in order, and an in-flight request honors `$/cancelRequest`.
+End-to-end tests — a real client driving the built binary over stdio — are **not** here; they are [E29](E29-e2e-testing.md)'s, and they carry capability negotiation, publishing, and the editor-facing surfaces.
 
-**REQ-TST-05 — CLI and server publish identical findings.**
+## 4. Tools & Frameworks
 
-A parity test runs `babel-lsp check` over a fixture and compares its findings — code, file, range — against what the server publishes for the same workspace ([F15](../features/F15-cli.md)). The two share one diagnostics engine; this test keeps them from drifting.
+The standard toolchain; versions are pinned in [E03-tech-stack](E03-tech-stack.md).
 
-### 2.4 Performance
+- **Test runner:** `cargo test` for unit and integration; `pytest` + `pytest-lsp` for the E29 layer.
+- **Assertions:** standard Rust assertions; snapshot tests (`insta`) for rendered hover/CLI output where exactness matters.
+- **Fakes over mocks:** prefer real fixtures (real `.po` files, real parse trees) to mocks. The one faked dependency is the external `pybabel`/`msgfmt` binary (REQ-TST-04), so the suite stays hermetic.
+- **Coverage reporter:** `cargo llvm-cov` in CI ([F16](../features/F16-release-ci.md)); the gate is the per-feature §11.4 tables, not a bare percentage.
 
-**REQ-TST-06 — The budgets are tested against a large fixture.**
+**REQ-TST-04 — External tools are faked.**
 
-A generated large workspace (thousands of calls, several locales) asserts the [E01 §8](E01-architecture.md) budgets: initial scan + load, relink time, and hover/completion latency. A regression that blows the budget fails CI.
+The catalog commands ([F13](../features/F13-catalog-commands.md)) shell out to `pybabel`/`msgfmt`. Tests inject the [fake-pybabel](#fake-pybabel) fixture on `PATH` so the suite asserts babel-lsp invokes the tool with the right arguments and reloads afterward — never that `pybabel` itself works.
 
-### 2.5 Feature coverage
+## 5. Fixtures Registry
 
-**REQ-TST-07 — Every feature capability has at least one e2e test.**
+The canonical home for reusable test data. Each fixture has a stable heading so a feature deep-links it from its §11.3 — e.g. `[the broken-placeholder catalog](../foundations/E17-testing.md#placeholder-mismatch)`.
 
-REQ-TST-01 says protocol behavior is tested end to end; this requirement makes that *complete and checkable*. Every feature spec owns at least one `pytest-lsp` test that exercises its surface against the shopfront, listed in the matrix below. A feature spec is not "done" until its row passes. Each feature spec carries a short **Testing** note pointing back here, so the contract is visible from both ends.
+### clean-shopfront
 
-The matrix is the coverage contract — one canonical assertion per feature, all against the shopfront fixture:
+The constitution's shopfront workspace, fully wired and consistent: `app/views.py`, `app/templates/checkout.html`, `locale/messages.pot`, and the `de`/`fr` catalogs. `de` translates `Checkout`; `fr` leaves it missing; `de`'s `Save` is `#, fuzzy`. The baseline every feature reads from.
 
-| Feature | Canonical e2e assertion |
-|---|---|
-| [F01](../features/F01-catalog-index.md) catalog index | Opening the workspace indexes all three catalogs; a probe request resolves `Checkout` as known, `de` translated, `fr` missing. |
-| [F02](../features/F02-message-extraction.md) extraction | The Python `_("Checkout")` and the Jinja `{% trans %}` block both surface as calls (asserted via references). |
-| [F03](../features/F03-diagnostics.md) diagnostics | Every code has a triggering fixture (REQ-TST-03) — 100% of the catalog. |
-| [F04](../features/F04-completion.md) completion | Typing `_("Che` returns a `Checkout` item with `[de] Kasse` detail and a correct `textEdit`. |
-| [F05](../features/F05-hover.md) hover | Hover on `_("Checkout")` returns markdown with `de` (ok) and `fr` (missing) rows. |
-| [F06](../features/F06-navigation.md) navigation | Goto returns locations in the `.pot` + both `.po`; references finds call + entries; a `#:` link resolves to the source line. |
-| [F07](../features/F07-code-actions.md) code actions | "Remove fuzzy flag" on `Save` and "Copy msgid to msgstr" on empty `fr` `Checkout` each return the expected `WorkspaceEdit`. |
-| [F08](../features/F08-inlay-hints.md) inlay hints | With `inlay_hint_locale = "de"`, `_("Checkout")` yields a hint ` = Kasse`; absent the config, none. |
-| [F09](../features/F09-symbols.md) symbols | `documentSymbol` of `de.po` lists `Checkout`/`Save`; `workspace/symbol "chec"` finds `Checkout`. |
-| [F10](../features/F10-rename.md) rename | `prepareRename` returns the msgid range; `rename` to `Checkout page` edits `views.py` + `.pot` + both `.po`. |
-| [F11](../features/F11-hardcoded-strings.md) hardcoded strings | With `detect_hardcoded_strings = true`, `return "Order placed"` raises `msg/hardcoded-string`; the extract action wraps it and appends the `.pot`. |
-| [F12](../features/F12-code-lens.md) code lens | The lens on `msgid "Checkout"` resolves to "1 of 2 locales translated"; on the call, "used 1 time". |
-| [F13](../features/F13-catalog-commands.md) catalog commands | A `.pot` code action offers "Update from template"; `executeCommand babel-lsp.update` invokes a **faked `pybabel`** (REQ-TST-08) and republishes. |
-| [F14](../features/F14-editor-integration.md) editor integration | A stdio smoke test: launching `babel-lsp lsp --stdio` (the Zed extension's command) answers `initialize` with the advertised capabilities. |
-| [F15](../features/F15-cli.md) CLI | `check` on a broken fixture exits `1` with the documented `concise` line; `--output-format json` matches the shape; a clean fixture exits `0`. |
-| [F16](../features/F16-release-ci.md) release & CI | Exercised by the workflows themselves running in GitHub Actions, not `pytest-lsp` — the QA job *is* the test. |
+### unknown-msgid
 
-**REQ-TST-08 — External tools are faked in e2e tests.**
+clean-shopfront with a typo'd `_("Chekout")` in `views.py` that no catalog knows — triggers `msg/unknown-id`. Reused by [F03](../features/F03-diagnostics.md), [F05](../features/F05-hover.md).
 
-The catalog commands ([F13](../features/F13-catalog-commands.md)) shell out to `pybabel`/`msgfmt`. Tests inject a fake binary on `PATH` that records its arguments and writes a fixed catalog, so the e2e suite stays hermetic and fast — it asserts babel-lsp invokes the tool with the right arguments and reloads afterward, never that `pybabel` itself works.
+### placeholder-mismatch
 
-## 3. Cross-References
+clean-shopfront whose German `msgstr` reads `%(naam)d` where the msgid said `%(num)d` — triggers `po/format-mismatch`. Reused by [F03](../features/F03-diagnostics.md), [F07](../features/F07-code-actions.md).
 
-- **Depends on:** [E01-architecture](E01-architecture.md) — the behaviors under test; [E02-folder-structure](E02-folder-structure.md) — the `tests/e2e/` tree.
-- **Related:** [F03-diagnostics](../features/F03-diagnostics.md) — the per-code fixtures; [F15-cli](../features/F15-cli.md) — the parity test; the per-feature matrix (§2.5) links every other feature spec.
+### duplicate-id
 
-## 4. Changelog
+A catalog with `msgid "Checkout"` twice — triggers `po/duplicate-id`. Reused by [F03](../features/F03-diagnostics.md).
 
-- **2026-06-15** — v0.2: added REQ-TST-07, the per-feature e2e **coverage matrix** (one canonical assertion per F01–F16) that makes "100% feature coverage" a checkable contract, and REQ-TST-08, the faked-`pybabel` rule keeping the suite hermetic. Each feature spec now carries a Testing note pointing at its matrix row.
-- **2026-06-15** — Initial draft: the unit/e2e split, the `pytest-lsp` harness, the shopfront fixture corpus with a non-ASCII variant, protocol-conformance and CLI-parity tests, and the performance budget test.
+### fstring-call
+
+clean-shopfront with `_(f"Hello {user}")` — triggers `msg/fstring-in-call` and exercises the unresolved-msgid path. Reused by [F02](../features/F02-message-extraction.md), [F03](../features/F03-diagnostics.md).
+
+### non-ascii-catalog
+
+Catalogs full of multi-byte translations, pinning the position-encoding edge cases ([E01 REQ-ARCH-09](E01-architecture.md)): a hover or rename range must land on the right character whether the client negotiated UTF-8 or UTF-16. Reused by [F05](../features/F05-hover.md), [F06](../features/F06-navigation.md), [F10](../features/F10-rename.md).
+
+### large-workspace
+
+A generated workspace — thousands of calls across several locales — for the [E01 §8](E01-architecture.md) performance budgets: initial scan + load, relink time, hover/completion latency. A regression that blows a budget fails CI.
+
+### fake-pybabel
+
+A stub `pybabel`/`msgfmt` placed on `PATH` that records its arguments and writes a fixed catalog, so command tests ([F13](../features/F13-catalog-commands.md), [F15](../features/F15-cli.md)) run without the real Babel toolchain (REQ-TST-04). Reused by [F13](../features/F13-catalog-commands.md), [F15](../features/F15-cli.md).
+
+## 6. Conventions
+
+**REQ-TST-03 — Requirement traceability.**
+
+Every load-bearing `REQ-<TAG>-NN` is named in the test that verifies it, so a reader traces a rule to its proof and back. Each feature's §11.4 table is the index of this mapping.
+
+- **Naming:** a test is named for the requirement and behavior it covers — `req_cat_01_discovers_po_under_locale_dir`.
+- **Structure:** arrange / act / assert; one behavior per test.
+- **Fakes vs mocks:** real fixtures by default; the only fake is the external `pybabel` (REQ-TST-04).
+- **Where feature tests link:** every feature's §11 links here for categories, tools, and fixtures rather than restating them.
+
+**REQ-TST-05 — `check` and the server publish identical findings.**
+
+A parity test runs `babel-lsp check` over a fixture and compares its findings — code, file, range — against what the server publishes for the same workspace ([F15](../features/F15-cli.md)). The two share one diagnostics engine; this keeps them from drifting, and it extends to `check --fix` versus the editor's quick fixes.
+
+## 7. Running Tests & CI
+
+`cargo test` runs unit + integration locally; `pytest tests/e2e` runs the E29 layer (it needs the built binary). The `qa.yml` workflow ([F16](../features/F16-release-ci.md)) runs both on every push and PR over the MSRV and stable toolchains, plus the coverage report. A failing test or an uncovered requirement (§2) blocks merge.
+
+## 8. Cross-References
+
+- **Depends on:** [constitution](../constitution.md) — the coverage principles this enforces; [E02-folder-structure](E02-folder-structure.md) — the `tests/` tree.
+- **Related:** [E29-e2e-testing](E29-e2e-testing.md) — the protocol-journey foundation; [E03-tech-stack](E03-tech-stack.md) — pinned tool versions; [F03](../features/F03-diagnostics.md), [F15](../features/F15-cli.md) — the per-code fixtures and the parity test.
+
+## 9. Changelog
+
+- **2026-06-15** — v0.3: restructured to the spec-writer testing-foundation template — split into the §2 coverage policy and the §5 fixtures registry (named, deep-linkable shopfront fixtures) that features link from their §11; moved the per-feature coverage matrix into each feature's §11.4; carved end-to-end protocol journeys out to the new [E29](E29-e2e-testing.md). Kept the CLI/server parity (REQ-TST-05) and faked-`pybabel` (REQ-TST-04) rules.
+- **2026-06-15** — v0.2: added the per-feature e2e coverage matrix and the faked-pybabel rule (now superseded by the §5 registry and E29).
+- **2026-06-15** — Initial draft: the unit/e2e split, the pytest-lsp harness, the shopfront fixture corpus, and the protocol-conformance, CLI-parity, and performance tests.

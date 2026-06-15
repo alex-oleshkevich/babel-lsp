@@ -2,7 +2,7 @@
 
 > **Status:** Draft
 >
-> **Version:** 0.2   ·   **Last updated:** 2026-06-15
+> **Version:** 0.3   ·   **Last updated:** 2026-06-15
 >
 > **Purpose:** The GitHub Actions pipeline — quality gates on every push, and cross-compiled binaries attached to a GitHub Release on every version tag.
 >
@@ -226,19 +226,75 @@ git push origin v0.4.0
 - **Release re-run idempotency** → re-running `release.yml` for an existing tag re-uploads assets to the same Release rather than creating a duplicate; `action-gh-release` overwrites by filename. Deleting and re-pushing a tag is the clean way to redo a botched release.
 - **A single matrix leg fails** → that platform's binary is missing from the Release; the job fails loudly rather than publishing a partial release silently. Fix and re-run.
 
-## 9. Open Questions & Decisions
+## 11. Testing
+
+F16's "tests" are the gates themselves — the two workflows are validated by running them, on every push and on every tag. A green `qa.yml` *is* the proof that fmt, clippy, the Rust suites, and the e2e suite pass; a failing version-check *is* the proof that the tag/`Cargo.toml` rule holds. So this section maps each release requirement to the workflow job or check that exercises it, rather than to a separate test file.
+
+### 11.1 Scope & coverage
+
+Target: **100% of this feature's behavior is covered.** Every `REQ-REL-NN` below maps to the workflow job or check that exercises it. See the policy in [E17-testing](../foundations/E17-testing.md#2-coverage-policy).
+
+### 11.2 Test plan
+
+Each row is a workflow behavior under test. The workflows run the same unit and integration suites defined in [E17-testing](../foundations/E17-testing.md) and the end-to-end suite in [E29-e2e-testing](../foundations/E29-e2e-testing.md); the release-specific behaviors are gated by their own jobs.
+
+| Behavior / scenario | Type | How it runs | Verifies |
+|---|---|---|---|
+| `qa.yml` runs fmt, clippy, `cargo test`, and the e2e suite on every push and PR | integration | the `rust` + `e2e` jobs, on both toolchains | REQ-REL-01 |
+| The Rust matrix builds and tests on MSRV `1.85` and `stable` | integration | the `rust` job's `toolchain` matrix | REQ-REL-02 |
+| The self-lint `babel-lsp check` step exits zero on a clean fixture workspace | integration | the `check` step over a [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) fixture | REQ-REL-03 |
+| A tag whose number disagrees with `Cargo.toml` fails the release | unit | the `version-check` job (deliberate mismatch fails it) | REQ-REL-04 |
+| The build matrix produces one stripped binary per target | integration | the `build` job's `target` matrix, five legs | REQ-REL-05 |
+| The release collects every binary plus the packaged Zed extension | integration | the `release` job (download-artifact → gh-release) | REQ-REL-06 |
+| The tag publishes a PyPI wheel and refreshes AUR + Homebrew | integration | the publish jobs (`maturin`, AUR/Homebrew bump) | REQ-REL-07 |
+
+### 11.3 Fixtures
+
+The QA and self-lint steps reuse the shared workspaces from the [E17 fixtures registry](../foundations/E17-testing.md#5-fixtures-registry) rather than defining their own.
+
+- **[clean-shopfront](../foundations/E17-testing.md#clean-shopfront)** — the workspace the `babel-lsp check` self-lint step runs over; the step asserts a clean exit.
+- **version-mismatch tag** — a feature-local check: a tag like `v9.9.9` pushed against an unbumped `Cargo.toml` must fail the `version-check` job (REQ-REL-04). Exercised by deliberately mismatching the two.
+
+### 11.4 Requirement coverage
+
+Every load-bearing requirement maps to the workflow job or check that proves it — this table is that index.
+
+| Requirement | Covered by |
+|---|---|
+| REQ-REL-01 | `qa.yml` `rust` job (fmt/clippy/test) + `e2e` job, every push/PR |
+| REQ-REL-02 | `qa.yml` `rust` job, `toolchain: ["1.85", "stable"]` matrix |
+| REQ-REL-03 | `qa.yml` self-lint `babel-lsp check` step over [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) |
+| REQ-REL-04 | `release.yml` `version-check` job; mismatch case from §11.3 |
+| REQ-REL-05 | `release.yml` `build` job, five-target matrix |
+| REQ-REL-06 | `release.yml` `release` job (artifacts + Zed extension) |
+| REQ-REL-07 | `release.yml` publish jobs (PyPI wheel, AUR + Homebrew bump) |
+
+## 13. Non-Functional Requirements
+
+### 13.1 Security & Privacy
+
+Release is where babel-lsp's supply chain lives, so this is the section that matters most for F16. The trust boundary is the one every user crosses: they download and run a prebuilt binary they did not compile, so everything below exists to make that binary trustworthy.
+
+- **Provenance & build integrity** — every release artifact is built in CI from the exact tagged commit, never from a developer's laptop. The `version-check` job (REQ-REL-04) asserts the tag equals `Cargo.toml`, so a binary's self-reported version always matches the source it was built from. Dependency provenance is pinned by the committed `Cargo.lock`, so a release builds the same dependency graph every time.
+- **Secrets handling** — the PyPI token and any future signing keys live only in GitHub Actions encrypted secrets, never in the repo or in workflow output. The PyPI, AUR, and Homebrew publish steps use narrowly **scoped tokens** so a leak of one channel's credential can't reach the others.
+- **Unsigned macOS binaries (v1)** — macOS artifacts ship **unsigned** in v1 (REQ-REL-07, OQ-REL-3): no Apple Developer cert is used, so Gatekeeper will quarantine them and the README documents the one-time `xattr -d com.apple.quarantine babel-lsp` override. This is a deliberate, documented trust gap — users override Gatekeeper manually — pending the macOS user base that would justify a paid signing cert.
+- **Privacy** — the workflows handle no user data; they operate only on the repo's source, the CI secrets above, and the published artifacts. There is nothing personal to classify or retain.
+- **Trust boundary of prebuilt binaries** — shipping binaries the user can't easily verify is the central risk here. v1 mitigates it with CI-only builds from tagged commits, a locked dependency graph, scoped publish tokens, and release notes generated from the commit log; signing and notarization (OQ-REL-3) are the remaining hardening step, deferred but tracked.
+
+## 14. Open Questions & Decisions
 
 - **Decision (resolves OQ-REL-1)** — v1 does **not** publish to crates.io. Distribution is the prebuilt binaries on the GitHub Release plus the editor packaging ([F14](F14-editor-integration.md)); a `cargo install babel-lsp` source path isn't a v1 goal and can be added later if demand appears.
 - **Decision (resolves OQ-REL-2)** — The project maintains an **AUR package and a Homebrew formula**, bumped on every release (REQ-REL-07), so Arch and macOS users get a first-class `yay -S` / `brew install`.
 - **Decision (resolves OQ-REL-3)** — macOS binaries ship **unsigned** in v1, with a documented Gatekeeper override (REQ-REL-07). Signing and notarization need a paid Apple Developer cert and CI secrets; deferred until a macOS user base warrants the cost.
 - **Decision (resolves OQ-REL-4)** — The release **publishes a PyPI wheel via `maturin`** (REQ-REL-07), so `pip install babel-lsp` works — the natural channel for a Python-ecosystem tool. This is the one v1 *source/package* channel; crates.io stays deferred (OQ-REL-1).
 
-## 10. Cross-References
+## 15. Cross-References
 
-- **Depends on:** [E03-tech-stack](../foundations/E03-tech-stack.md) — the toolchain and MSRV the gates enforce; [E17-testing](../foundations/E17-testing.md) — the `pytest-lsp` e2e suite the QA workflow runs.
+- **Depends on:** [E03-tech-stack](../foundations/E03-tech-stack.md) — the toolchain and MSRV the gates enforce; [E17-testing](../foundations/E17-testing.md) — the unit/integration suites and `pytest-lsp` e2e suite the QA workflow runs; [E29-e2e-testing](../foundations/E29-e2e-testing.md) — the end-to-end suite `qa.yml` runs.
 - **Related:** [F14-editor-integration](F14-editor-integration.md) — the Zed extension artifact the release attaches; [F15-cli](F15-cli.md) — the `babel-lsp check` self-lint step.
 
-## 11. Changelog
+## 16. Changelog
 
+- **2026-06-15** — v0.3: restructured to the spec-writer template — added §11 Testing (the workflows *are* the gates; every REQ-REL maps to the job or check that exercises it) and §13.1 Security & Privacy (the supply-chain trust boundary of shipping prebuilt binaries: CI-only builds from tagged commits, locked dependencies, scoped publish tokens, unsigned-macOS gap). Renumbered Open Questions → §14, Cross-References → §15, Changelog → §16.
 - **2026-06-15** — Resolved the release open questions: no crates.io (OQ-REL-1); ship a **PyPI wheel** via maturin (OQ-REL-4); maintain **AUR + Homebrew** packages (OQ-REL-2); macOS binaries **unsigned** with a documented Gatekeeper override (OQ-REL-3) — all gathered into REQ-REL-07.
 - **2026-06-15** — Initial draft: the `qa.yml` gate (fmt/clippy/test/e2e on MSRV + stable), the `release.yml` tag-triggered build matrix over five targets, the tag/`Cargo.toml` version check, and the GitHub Release packaging the binaries plus the Zed extension.

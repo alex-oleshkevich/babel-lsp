@@ -2,7 +2,7 @@
 
 > **Status:** Draft
 >
-> **Version:** 0.3   ·   **Last updated:** 2026-06-15
+> **Version:** 0.4   ·   **Last updated:** 2026-06-15
 >
 > **Purpose:** How babel-lsp ships to its first-class editors — a Zed extension, and Neovim and Helix configuration — plus the generic stdio path for any LSP client.
 >
@@ -218,13 +218,13 @@ stdio is the only transport v1 ships, and every editor config uses it.
 
 `babel-lsp lsp --stdio` is the launch every editor uses (REQ-ARCH-01); `--stdio` is implied when no flag is given. v1 ships no remote transport — neither `--tcp` nor `--http` ([E01](../foundations/E01-architecture.md) resolves OQ-ARCH-2 to stdio-only). stdio reaches every first-class editor, so a socket transport is deferred until a concrete need appears.
 
-## 6. Examples & Use Cases
+## 9. Examples & Use Cases
 
 A translator-engineer on the shopfront app uses Neovim. They drop the §5.3 snippet into `init.lua`. Opening `app/views.py`, the server attaches and flags a typo'd `_("Chekout")` no catalog knows. They open `app/templates/checkout.html` — because `html` and `jinja` are in `filetypes`, the server attaches there too and the `{{ _("Your cart") }}` call resolves. Opening `locale/de/LC_MESSAGES/messages.po`, the `po` filetype attaches the server again, and the placeholder check on the German `msgstr` runs. One binary, three file types, no plugin.
 
 A teammate on Zed installs the in-repo extension, then adds the §5.2 settings opt-in so babel-lsp runs beside the default Python server. To run "update catalog from sources" ([F13](F13-catalog-commands.md)), they trigger it as a code action, since Zed exposes no command palette for LSP commands.
 
-## 7. Edge Cases & Failure Modes
+## 10. Edge Cases & Failure Modes
 
 - Binary missing from `PATH` → each editor surfaces its own "server failed to start" error; the README troubleshooting section covers setting an absolute path.
 - Zed extension installed but no settings opt-in → the server is registered but never started; the README flags this as the most common Zed mistake.
@@ -232,20 +232,101 @@ A teammate on Zed installs the in-repo extension, then adds the §5.2 settings o
 - Helix with the type checker listed first → babel-lsp hover and goto silently unavailable on Python; expected, documented in §5.4.
 - Two servers fighting over diagnostics → cannot happen; babel-lsp namespaces its diagnostics with `source: "babel-lsp"` (REQ-EDIT-03).
 
-## 8. Open Questions & Decisions
+## 11. Testing
+
+This spec is delivery and packaging, so most of its plan is integration and manual checks: launching the binary, verifying the Zed extension defines the PO language and finds the binary, and confirming each editor attaches to the right file types.
+
+### 11.1 Scope & coverage
+
+Target: **100% of this feature's behavior is covered.** Every `REQ-EDIT-NN` maps to at least one test or a documented manual check; there are no editor-rendered surfaces of babel-lsp's own (no §6), so the coverage here is the launch path, the attach path, and the config snippets. See the policy in [E17 §2](../foundations/E17-testing.md#2-coverage-policy).
+
+### 11.2 Test plan
+
+Each row is a behavior under test. The stdio smoke test is automated (E29); the editor-config and extension checks are integration or manual, since they exercise third-party editors babel-lsp does not ship.
+
+| Behavior / scenario | Type | Notes | Verifies |
+|---|---|---|---|
+| `babel-lsp lsp --stdio` launches and answers `initialize` with the advertised capabilities | integration (E29 smoke) | automated over stdio | REQ-EDIT-01, REQ-EDIT-05, REQ-EDIT-06 |
+| The Zed extension's `languages/po/config.toml` registers `PO` with suffixes `po`/`pot` | integration | parse the shipped `config.toml`; assert `path_suffixes` | REQ-EDIT-04 |
+| Binary discovery: `worktree.which` hit, then venv / pip-user / cargo fallbacks, then the clear install error | integration | drive `language_server_command` with each PATH state | REQ-EDIT-04 |
+| The Zed glue ignores `language_server_id` and serves the one server | integration | call the hook with a mismatched id | REQ-EDIT-04 |
+| Neovim / Helix snippets list the Python, Jinja/HTML, **and** PO file types and the root markers | manual | apply the §5.3/§5.4 snippets; open one buffer of each type and confirm attach | REQ-EDIT-02 |
+| babel-lsp coexists with the primary Python server (namespaced `source`, no formatting claim) | manual | run beside pyright/pyright-equivalent; confirm both attach | REQ-EDIT-03 |
+| A `.po` buffer attaches the server via the defined PO language | integration (E29) | open a `.po` fixture; await a publish | REQ-EDIT-02, REQ-EDIT-04 |
+
+### 11.3 Fixtures
+
+The launch and attach checks read the [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) workspace from the [E17 fixtures registry](../foundations/E17-testing.md#5-fixtures-registry) — it carries the `.py`, `.html`, and `.po` files each editor config must attach to. No feature-local fixtures are needed.
+
+### 11.4 Requirement coverage
+
+Every load-bearing requirement maps to a test or a documented manual check — this table is the proof.
+
+| Requirement | Covered by |
+|---|---|
+| REQ-EDIT-01 | stdio launch + `initialize` smoke test (E29) |
+| REQ-EDIT-02 | PO-attach E2E (E29); Neovim/Helix filetype manual check |
+| REQ-EDIT-03 | coexistence manual check beside the Python server |
+| REQ-EDIT-04 | PO-language config parse; binary-discovery + fallback + error tests; id-ignore test |
+| REQ-EDIT-05 | stdio launch + `initialize` smoke test (E29) |
+| REQ-EDIT-06 | stdio launch + `initialize` smoke test (E29) |
+
+## 12. End-to-End Test Plan
+
+The end-to-end surface of this spec is small but load-bearing: the server actually starts over stdio and a real `.po` buffer attaches it. These journeys run against the built binary the way an editor does.
+
+### 12.1 Coverage target
+
+**100% of the feature's scope, end to end** — the canonical launch journey plus the reachable error path (binary not found). See the policy in [E29 §2](../foundations/E29-e2e-testing.md#2-coverage-policy).
+
+### 12.2 Scenarios
+
+The canonical scenario is the stdio smoke test; the others confirm the PO-language attach and the missing-binary error a user hits on a fresh machine.
+
+| # | Journey | Path | Expected outcome |
+|---|---|---|---|
+| E2E-01 | Launch `babel-lsp lsp --stdio` and send `initialize` | happy | The server answers with the advertised capabilities. |
+| E2E-02 | Open a `.po` buffer in a client bound via the defined PO language | happy | The server attaches and the buffer receives a publish. |
+| E2E-03 | Resolve the launch when no `babel-lsp` binary is on PATH or in the fallback locations | error | The editor surfaces the clear "install with `pip install babel-lsp`" error; no server starts. |
+
+### 12.3 Acceptance criteria & Definition of Done
+
+The §12.2 scenarios, written Given/When/Then, are this feature's acceptance criteria:
+
+| # | Given | When | Then |
+|---|---|---|---|
+| AC-01 | The built `babel-lsp` binary | the client launches `babel-lsp lsp --stdio` and sends `initialize` | the server replies with the advertised capabilities. |
+| AC-02 | A workspace with a `.po` catalog and the PO language defined | the client opens the `.po` buffer | the server attaches and publishes diagnostics for it. |
+| AC-03 | A machine with no `babel-lsp` on PATH or in the venv/pip/cargo fallbacks | the editor tries to start the server | it surfaces the clear install error and starts nothing. |
+
+**Definition of Done:** every `REQ-EDIT-NN` has a passing test or documented manual check (§11.4), every acceptance scenario above passes, and the §13.1 security review holds.
+
+## 13. Non-Functional Requirements
+
+### 13.1 Security & Privacy
+
+The trust boundary here is narrow: the extension and configs only spawn a local binary they locate on the user's own machine.
+
+- **Local launch only** — every editor starts the server by spawning a `babel-lsp` binary found on the user's machine; nothing is fetched or executed from the network, so this feature adds no network surface.
+- **Bounded binary discovery** — the Zed extension resolves the binary through `worktree.which` and a fixed set of known local install locations (venv, pip-user, cargo), never an arbitrary path taken from untrusted input.
+- **Environment pass-through** — the spawned server inherits the worktree's own environment so it can find `pybabel`; no new credentials or secrets are introduced, and nothing beyond the user's existing shell environment is exposed.
+- **No data leaves the machine** — the extension downloads nothing and phones home nowhere; all work is local stdio between editor and server.
+
+## 14. Open Questions & Decisions
 
 - **Decision (OQ-ARCH-2, owned by [E01](../foundations/E01-architecture.md))** — resolved to **stdio only** for v1; no `--tcp` or `--http`. Every launch command in this spec uses stdio.
 - **Decision** — no bespoke VS Code extension in v1; VS Code uses the generic stdio bridge. Revisit if demand warrants a first-class extension.
 - **Decision** — the Zed extension is LSP-only, locating the binary on `PATH`; a configurable binary path is a later enhancement, not v1.
 
-## 9. Cross-References
+## 15. Cross-References
 
 - **Depends on:** [E01-architecture](../foundations/E01-architecture.md) — the stdio transport, REQ-ARCH-01; [constitution](../constitution.md) — P2 editor-agnostic.
 - **Related:** [F13-catalog-commands](F13-catalog-commands.md) — how commands surface per editor; [F16-release-ci](F16-release-ci.md) — packaging and registry publication; [F01](F01-catalog-index.md)/[F02](F02-message-extraction.md) — the catalog and source facts editors attach to; [E15](../foundations/E15-app-config.md) — root markers and config.
 - **Testing:** [E17 §2.5](../foundations/E17-testing.md) — the stdio `initialize` smoke test in the coverage matrix.
 
-## 10. Changelog
+## 16. Changelog
 
+- **2026-06-15** — v0.4: adopted the updated spec-writer structure — added §11 Testing (scope, integration/manual test plan, the clean-shopfront fixture link, and the REQ-EDIT-01..06 coverage table), a light §12 End-to-End plan (the stdio `initialize` smoke test, the PO-buffer attach, and the binary-not-found error, with Given/When/Then acceptance and a DoD), and §13.1 Security & Privacy. Renumbered the existing sections to canonical order. No §6 UI Mockups and no §13.2 Accessibility — F14 ships packaging and config, not a babel-lsp-rendered surface, and accessibility is the editor's (constitution §4.6).
 - **2026-06-15** — v0.3: hardened the Zed extension against real failures found in the sibling fastapi-lsp extension (REQ-EDIT-04) — the extension now **defines the PO language** (`languages/po/config.toml`), since Zed has no built-in one and the server otherwise never attaches to catalogs; binary discovery uses `worktree.which` + venv/pip/cargo fallbacks for the GUI-launch missing-`PATH` case (zed#19779) and passes the worktree env through so `pybabel` is found; added the `zed_extension_api` version-pinning caveat and the Jinja2-not-built-in note.
 - **2026-06-15** — v0.2: resolved OQ-ARCH-2 to **stdio only** — removed the `--tcp`/`--http` references from REQ-EDIT-06 and the launch commands.
 - **2026-06-15** — Initial draft: first-class Zed extension (LSP-only, PATH-first), Neovim and Helix config snippets, the generic stdio path for VS Code and others, the shared filetype/root table, and the transport story.

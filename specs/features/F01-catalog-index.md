@@ -2,7 +2,7 @@
 
 > **Status:** Draft
 >
-> **Version:** 0.2   ·   **Last updated:** 2026-06-15
+> **Version:** 0.3   ·   **Last updated:** 2026-06-15
 >
 > **Purpose:** How the server finds, parses, and indexes your `.po`/`.pot` catalogs into the in-memory map every other feature reads — and how it keeps that index current as catalogs change on disk. This is the backbone of the whole server.
 >
@@ -163,7 +163,7 @@ This spec builds the index; the features that read it live elsewhere.
 
 The [CatalogIndex](../foundations/E07-data-model.md) read API ([E07 REQ-IDX-04](../foundations/E07-data-model.md)) is the only door in. Completion ([F04](F04-completion.md)) walks `all_msgids`; hover ([F05](F05-hover.md)) and navigation ([F06](F06-navigation.md)) call `lookup` and read each entry's `line`; diagnostics ([F03](F03-diagnostics.md)) use `is_in_pot` and `missing_locales`. None of them re-parse a catalog — they all read this one index.
 
-## 6. Visualizations
+## 7. Visualizations
 
 The three passes turn a directory tree into one queryable index.
 
@@ -201,7 +201,7 @@ flowchart TB
     linkStyle 7 stroke:#28A745,stroke-width:2px
 ```
 
-## 7. Examples & Use Cases
+## 9. Examples & Use Cases
 
 You open the shopfront fresh. The server discovers `locale/`, finds the three catalogs, and tags each one: `messages.pot` as `("", "messages")`, the German file as `("de", "messages")`, the French file as `("fr", "messages")` (REQ-CAT-02). It parses all three with `polib` and groups their entries (REQ-CAT-05).
 
@@ -209,7 +209,7 @@ Now `lookup` on the `"Checkout"` key returns two entries — German `"Kasse"` an
 
 You start translating. You open `fr/LC_MESSAGES/messages.po` and type `msgstr "Paiement"` under `"Checkout"`. The buffer overlay shadows the on-disk copy (REQ-CAT-07), a debounced rebuild runs (REQ-CAT-08), and the missing-French warning on your source call clears — before you save the file.
 
-## 8. Edge Cases & Failure Modes
+## 10. Edge Cases & Failure Modes
 
 - A locale directory that doesn't exist or can't be read → skipped silently; other directories still index (P3).
 - A `.po` outside any `LC_MESSAGES` directory → `locale_domain_from_po_path` returns `None`; the file is skipped, no bogus locale.
@@ -223,13 +223,99 @@ You start translating. You open `fr/LC_MESSAGES/messages.po` and type `msgstr "P
 - A new locale directory appears on disk → its catalogs are discovered and indexed, and the locale joins `all_locales` without a server restart (REQ-CAT-09).
 - A catalog is half-written when the watcher fires (a non-atomic save) → `polib` parses what it can (P3); the save's completing event triggers another rebuild that corrects it.
 
-## 9. Cross-References
+## 11. Testing
+
+This feature is tested by unit tests over its pure rules — the path mapping, the line map, the index grouping — and by integration tests that wire discovery, `polib` loading, the overlay, and the debounced rebuild against real shopfront catalogs.
+
+### 11.1 Scope & coverage
+
+Target: **100% of this feature's behavior is covered.** Every `REQ-CAT-NN` below maps to at least one test, and every edge case (§10) has a test. See the policy in [E17 §2](../foundations/E17-testing.md#2-coverage-policy).
+
+### 11.2 Test plan
+
+Each row is a behavior under test. Shared fixtures link to the [E17 registry](../foundations/E17-testing.md#5-fixtures-registry); each row names the requirement it verifies.
+
+| Behavior / scenario | Type | Fixtures | Verifies |
+|---|---|---|---|
+| Discovery finds every `.po`/`.pot` under the locale dirs; a missing dir is skipped | integration | [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) | REQ-CAT-01 |
+| The path-to-`(locale, domain)` rule maps `de`/`fr`/`.pot` paths; a non-`LC_MESSAGES` `.po` yields `None` | unit | [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) | REQ-CAT-02 |
+| `polib` parses a catalog into entries; the header is dropped, fuzzy is flagged; a malformed file is skipped | integration | [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) | REQ-CAT-03 |
+| The line map lands `msgid`/`msgctxt`/obsolete keys on their source lines | unit | [non-ascii-catalog](../foundations/E17-testing.md#non-ascii-catalog) | REQ-CAT-04 |
+| Pass 2 groups entries by `CatalogKey` across locales/domains; `all_locales`/`all_domains` are recorded | integration | [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) | REQ-CAT-05 |
+| `.pot` entries land in the `pot_entries` side-map; an unknown msgid resolves in neither map | integration | [unknown-msgid](../foundations/E17-testing.md#unknown-msgid) | REQ-CAT-06 |
+| An open buffer overlays its disk copy during rebuild; a mid-edit parse failure keeps disk entries | integration | [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) | REQ-CAT-07 |
+| A catalog change triggers one debounced wholesale rebuild swapped in atomically | integration | [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) | REQ-CAT-08 |
+| An external write fires create/change/delete/rename actions; a burst debounces to one rebuild | integration | [clean-shopfront](../foundations/E17-testing.md#clean-shopfront), [large-workspace](../foundations/E17-testing.md#large-workspace) | REQ-CAT-09 |
+| A watched file open in the editor ignores its watcher event; `didClose` reverts to disk | integration | [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) | REQ-CAT-10 |
+
+### 11.3 Fixtures
+
+Reusable fixtures live in the [E17 fixtures registry](../foundations/E17-testing.md#5-fixtures-registry) — [clean-shopfront](../foundations/E17-testing.md#clean-shopfront) is the baseline, [unknown-msgid](../foundations/E17-testing.md#unknown-msgid) exercises the empty-resolution path, [non-ascii-catalog](../foundations/E17-testing.md#non-ascii-catalog) pins the line-map positions, and [large-workspace](../foundations/E17-testing.md#large-workspace) drives the burst-debounce. This feature needs no local fixture of its own.
+
+### 11.4 Requirement coverage
+
+Every load-bearing requirement maps to a test — this table is the proof.
+
+| Requirement | Covered by |
+|---|---|
+| REQ-CAT-01 | `req_cat_01_discovers_po_under_locale_dir` |
+| REQ-CAT-02 | `req_cat_02_path_maps_to_locale_domain` |
+| REQ-CAT-03 | `req_cat_03_polib_parses_into_entries` |
+| REQ-CAT-04 | `req_cat_04_line_map_lands_on_msgid_line` |
+| REQ-CAT-05 | `req_cat_05_groups_entries_by_catalog_key` |
+| REQ-CAT-06 | `req_cat_06_pot_entries_in_side_map` |
+| REQ-CAT-07 | `req_cat_07_open_buffer_overlays_disk` |
+| REQ-CAT-08 | `req_cat_08_change_triggers_debounced_rebuild` |
+| REQ-CAT-09 | `req_cat_09_external_writes_reindexed` |
+| REQ-CAT-10 | `req_cat_10_open_buffer_outranks_disk` |
+
+## 12. End-to-End Test Plan
+
+F01 has no surface of its own, but every feature reads the index it builds, so its journeys are tested end to end through the running server: a real client opens a workspace, probes a resolved msgid, and writes a catalog on disk to watch the re-index.
+
+### 12.1 Coverage target
+
+**100% of the feature's user-visible scope, end to end** — the index loading on open, the external-write re-index, and the malformed-catalog degrade path. See the policy in [E29 §2](../foundations/E29-e2e-testing.md#2-coverage-policy).
+
+### 12.2 Scenarios
+
+Each row is a journey a real editor drives over stdio. The watcher re-index journey is the shared protocol-conformance journey from [E29 REQ-E2E-03](../foundations/E29-e2e-testing.md#5-patterns).
+
+| # | Journey | Path | Expected outcome |
+|---|---|---|---|
+| E2E-01 | Open [clean-shopfront](../foundations/E17-testing.md#clean-shopfront); probe `Checkout` | happy | The index loads; a probe resolves `Checkout` as de-translated (`Kasse`) and fr-missing, and `is_in_pot` is true |
+| E2E-02 | An external `.po` write lands via the watcher | happy | The watcher event re-indexes and the affected diagnostics update (shared [E29 REQ-E2E-03](../foundations/E29-e2e-testing.md#5-patterns) journey) |
+| E2E-03 | Open a workspace with a malformed catalog | error | The bad file is skipped with a log; the readable entries in every other catalog stay indexed and queryable |
+
+### 12.3 Acceptance criteria & Definition of Done
+
+The §12.2 scenarios, written Given/When/Then, are this feature's acceptance criteria:
+
+| # | Given | When | Then |
+|---|---|---|---|
+| AC-01 | a fresh clean-shopfront | the client opens the workspace and probes `Checkout` | the index loads and resolves `Checkout` to `Kasse` (de) and missing (fr), with `is_in_pot` true |
+| AC-02 | an indexed workspace | a translator writes a `.po` outside the editor | the watcher re-indexes and the affected diagnostics update without a restart |
+| AC-03 | a workspace with one malformed catalog | the client opens it | the bad file is skipped and every other catalog's entries remain queryable |
+
+**Definition of Done:** every `REQ-CAT-NN` has a passing test (§11.4), every acceptance scenario above passes, and the §13 security concern is verified.
+
+## 13. Non-Functional Requirements
+
+### 13.1 Security & Privacy
+
+- **Static analysis only** — per P1, the server never imports, executes, or introspects your code; it only reads `.po`/`.pot` and source text. It makes no network calls and has no auth, accounts, or PII.
+- **File-read trust boundary** — the only resource this feature touches is the local filesystem, and it reads only within the configured or discovered workspace and locale directories. A path that doesn't fit the catalog shape is skipped, never followed elsewhere.
+- **Untrusted input degrades, never crashes** — catalog text is untrusted and often half-written; per P3 a malformed entry or unparsable file is logged and skipped, and the rest of the index still builds. Bad input never panics the server.
+- **No write surface** — F01 only reads catalogs into memory; it never writes them. Catalog writes are owned by the [F13](F13-catalog-commands.md) commands.
+
+## 16. Cross-References
 
 - **Depends on:** [E07-data-model](../foundations/E07-data-model.md) — `CatalogIndex`, `CatalogEntry`, `CatalogKey` (REQ-IDX-03/05/07); [E01-architecture](../foundations/E01-architecture.md) — the debounced relink and the index swap.
 - **Related:** [E15-app-config](../foundations/E15-app-config.md) — supplies `locale_dirs`/`domains` and the discovery merge; [F03-diagnostics](F03-diagnostics.md) — reads `is_in_pot`/`missing_locales`; [F04-completion](F04-completion.md), [F05-hover](F05-hover.md), [F06-navigation](F06-navigation.md) — readers of this index.
-- **Testing:** [E17 §2.5](../foundations/E17-testing.md) — this feature's row in the e2e coverage matrix.
+- **Testing:** [E17-testing](../foundations/E17-testing.md#2-coverage-policy) — the coverage policy and the [fixtures registry](../foundations/E17-testing.md#5-fixtures-registry) this feature's §11 reuses; [E29-e2e-testing](../foundations/E29-e2e-testing.md#2-coverage-policy) — the E2E policy and the shared watcher conformance journey ([REQ-E2E-03](../foundations/E29-e2e-testing.md#5-patterns)).
 
-## 10. Changelog
+## 17. Changelog
 
+- **2026-06-15** — v0.3: restructured to the updated spec-writer template — added §11 Testing (scope, the per-`REQ-CAT` test plan, fixtures, and the requirement-coverage table), §12 End-to-End Test Plan (index-load, watcher re-index, and malformed-degrade journeys, with §12.3 Given/When/Then acceptance criteria and a Definition of Done), and §13.1 Security & Privacy (static-analysis-only, the file-read trust boundary, and degrade-never-crash). Renumbered the existing sections to the canonical order (Visualizations §7, Examples §9, Edge Cases §10, Cross-References §16, Changelog §17). No behavioral content changed.
 - **2026-06-15** — v0.2: defined external-change detection — REQ-CAT-09 watches `**/*.po`/`**/*.pot` via `didChangeWatchedFiles` (or a native `notify` fallback) and maps create/change/delete/rename to index actions with burst-debouncing, and REQ-CAT-10 gives an open buffer precedence over its disk file so external saves never clobber in-editor edits. Added the translator-save, `git checkout`, new-locale, and half-written-file edge cases.
 - **2026-06-15** — Initial draft: discovery via globset with the exact path-to-`(locale, domain)` rule (REQ-CAT-01/02); `polib` loading plus the `PoLineMap` for goto positions (REQ-CAT-03/04); pass-2 grouping by `CatalogKey` with the separate `.pot` side-map (REQ-CAT-05/06); the unsaved-buffer overlay (REQ-CAT-07); the debounced wholesale rebuild (REQ-CAT-08). Translated from the legacy `catalog/loader.rs`, `catalog/index.rs`, and `state.rs` `reload_catalogs` logic.

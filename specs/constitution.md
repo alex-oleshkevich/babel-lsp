@@ -2,7 +2,7 @@
 
 > **Status:** Approved
 >
-> **Version:** 1.0   ·   **Last updated:** 2026-06-15
+> **Version:** 1.1   ·   **Last updated:** 2026-06-15
 >
 > **Purpose:** The governing rules for both the product and its specs — the principles babel-lsp must honor, and the conventions every spec in this suite follows.
 
@@ -55,7 +55,11 @@ Every spec follows the suite template: the metadata header, then the numbered se
 
 Specs link to each other inline and list every connection in their Cross-References section. The index is updated in the same edit as any spec change.
 
-### 4.4 Status lifecycle & changelog
+### 4.4 Testing & coverage
+
+Every feature ships a test plan in its spec's **Testing** section (§11), covering **100% of its scope** — each `REQ-<TAG>-NN` maps to a test, and every editor-surface state and edge case is covered. The shared coverage policy, test categories, and the reusable **fixtures registry** live in [E17-testing](foundations/E17-testing.md); the end-to-end coverage policy, harness, and patterns live in [E29-e2e-testing](foundations/E29-e2e-testing.md). User-facing features add an **End-to-End Test Plan** (§12) covering the happy path and every reasonable error path. Feature specs link to these foundations rather than restating them.
+
+### 4.5 Status lifecycle & changelog
 
 A spec moves `Draft → In Review → Approved`, and can end in one of two terminal states:
 
@@ -65,6 +69,22 @@ A spec moves `Draft → In Review → Approved`, and can end in one of two termi
 Continuously-maintained meta docs — the index, glossary, and roadmap — carry a fourth status instead: **Living**. A Living doc never graduates through the lifecycle; it's kept current, updated in the same edit as the specs it tracks.
 
 Archived specs keep their name; the index lists them so the trail stays visible. Every change gets a dated changelog entry.
+
+### 4.6 Non-functional & operational scope
+
+Decided once here; every feature spec includes exactly the sections enabled below. Security & Privacy is always required; the rest were scoped at kickoff, each recorded as Enabled or N/A so a skip is a deliberate, revisitable decision rather than a silent omission.
+
+| Concern | Spec section | Status |
+|---|---|---|
+| Security & Privacy | §13.1 | **Required** |
+| Accessibility | §13.2 | **N/A** — babel-lsp renders no pixels; it returns LSP data the editor draws, so WCAG (keyboard, focus order, screen reader, contrast, motion) is wholly the editor's. The one content duty that *is* babel-lsp's — convey status in words, never by color alone — is a presentation rule recorded in §6, not a per-feature §13.2. |
+| Permissions & Roles | §13.3 | **N/A** — a single-user developer tool with no roles or access tiers. |
+| Performance & Scale | §13.4 | **N/A per-feature** — the budgets are defined once in [E01 §8](foundations/E01-architecture.md) and tested in [E17](foundations/E17-testing.md), not restated per feature. |
+| Observability | §13.5 | **N/A** — a local process with structured logging only ([E15](foundations/E15-app-config.md)); no service telemetry. |
+| Rollout & Migration | §14 | **N/A** — shipped as versioned binaries/packages ([F16](features/F16-release-ci.md)); no ramped rollout or persistent data to migrate. |
+| Acceptance criteria & DoD | §12.3 | **Enabled** — each user-facing feature's E2E scenarios double as Given/When/Then acceptance criteria, with a per-feature Definition of Done. |
+
+So a babel-lsp feature spec always carries §11 Testing and §13.1 Security & Privacy; it adds §6 UI Mockups when it has an editor or terminal surface, and §12 (with §12.3 acceptance) when it is user-facing. §13.2 and the other §13/§14 sections are omitted under this scope — accessibility is the editor's, with the one content rule in §6.
 
 ## 5. The Recurring Example Cast
 
@@ -83,7 +103,8 @@ When a spec needs a mistake to illustrate a diagnostic, it breaks the shopfront:
 
 - **Mermaid** for flows, lifecycles, and graphs — labeled arrows and a semantic color palette (see the `mermaid` skill). **Do not use `%%{init}%%` directives**; style nodes with `classDef`/`class` and plain theme defaults only.
 - **Tables** for index catalogs, the diagnostic catalog, and decision matrices.
-- **ASCII mockups** for *editor surfaces* — the hover card, the completion menu, an inlay hint — where showing the rendered shape is clearer than describing it. There are no full-application *screen* mockups; the product has no screens, only these small LSP surfaces.
+- **ASCII mockups** for *every editor or terminal surface* babel-lsp produces — the hover card, completion menu, inlay hint, code lens, the lightbulb action menu, diagnostic squiggles, and the CLI's terminal output. They live in each spec's **UI Mockups** section (§6); follow the skill's `references/ascii-mockups.md`. There are no full-application screen mockups — the product has only these small LSP and CLI surfaces.
+- **Status and meaning are carried in words, never color alone.** babel-lsp can't control how an editor renders its data, so every surface conveys state in text — `ok`/`fuzzy`/`missing`, `(untranslated)`, a named placeholder in a diagnostic message — and never relies on a color the editor may or may not apply. This is the one accessibility duty that is babel-lsp's rather than the editor's (constitution §4.6).
 
 ## 7. Cross-References
 
@@ -91,4 +112,5 @@ When a spec needs a mistake to illustrate a diagnostic, it breaks the shopfront:
 
 ## 8. Changelog
 
+- **2026-06-15** — v1.1: adopted the updated spec-writer structure — added §4.4 Testing & coverage (defers to E17/E29), §4.6 the non-functional & operational scope table (Security required; Accessibility N/A — babel-lsp renders no pixels, so WCAG is the editor's; its one content duty (status in words, never color alone) is recorded as a §6 presentation rule; Permissions/Performance/Observability/Rollout N/A with reasons; Acceptance criteria Enabled), and broadened §6 to mandate UI Mockups for every editor/terminal surface. Renumbered status-lifecycle to §4.5.
 - **2026-06-15** — Initial constitution: six product principles, the shopfront example cast, the rejected regex-Jinja alternative, and naming/diagnostic-code conventions.
