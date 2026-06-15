@@ -8,6 +8,7 @@ use tower_lsp_server::{
 };
 use walkdir::WalkDir;
 
+use crate::config::resolve_config;
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -85,8 +86,17 @@ impl LanguageServer for Backend {
         let state = Arc::clone(&self.state);
         tokio::task::spawn(async move {
             if let Some(root) = state.workspace_root.get().cloned() {
-                let indicators = state.config.indicators();
-                let jinja_exts = state.config.jinja_extensions.clone();
+                // Resolve config from disk before scanning
+                let resolved = tokio::task::spawn_blocking({
+                    let root = root.clone();
+                    move || resolve_config(&root)
+                })
+                .await
+                .unwrap_or_default();
+                *state.config.write().await = resolved;
+
+                let indicators = state.config.read().await.indicators();
+                let jinja_exts = state.config.read().await.jinja_extensions.clone();
 
                 match tokio::task::spawn_blocking(move || {
                     scan_workspace(root.as_path(), &indicators, &jinja_exts)

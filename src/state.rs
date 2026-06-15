@@ -23,7 +23,7 @@ pub struct WorkspaceState {
     doc_locks: DashMap<Uri, Arc<Mutex<()>>>,
     utf8_encoding: AtomicBool,
     pub workspace_root: OnceLock<PathBuf>,
-    pub config: Config,
+    pub config: RwLock<Config>,
     pub catalog_files: RwLock<Vec<PathBuf>>,
 }
 
@@ -34,7 +34,7 @@ impl WorkspaceState {
             doc_locks: DashMap::new(),
             utf8_encoding: AtomicBool::new(false),
             workspace_root: OnceLock::new(),
-            config: Config::default(),
+            config: RwLock::new(Config::default()),
             catalog_files: RwLock::new(vec![]),
         }
     }
