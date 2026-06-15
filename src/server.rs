@@ -4,14 +4,15 @@ use std::{
     time::Duration,
 };
 
+use notify::{RecommendedWatcher, Watcher};
 use ropey::Rope;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 use walkdir::WalkDir;
 
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
-use crate::config::resolve_config;
+use crate::config::{discover_locale_dirs, resolve_config};
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -40,6 +41,16 @@ impl LanguageServer for Backend {
             .unwrap_or(false);
 
         self.state.set_utf8_encoding(utf8);
+
+        // REQ-CAT-09: detect whether the client supports dynamic file-watcher registration.
+        let client_watches = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.did_change_watched_files.as_ref())
+            .and_then(|f| f.dynamic_registration)
+            .unwrap_or(false);
+        self.state.set_client_watches_files(client_watches);
 
         let root_uri = params
             .workspace_folders
@@ -106,6 +117,7 @@ impl LanguageServer for Backend {
         });
 
         // Workspace scan — populates catalog_files, then triggers the initial rebuild.
+        let client = self.client.clone();
         let state = Arc::clone(&self.state);
         tokio::task::spawn(async move {
             if let Some(root) = state.workspace_root.get().cloned() {
@@ -116,6 +128,17 @@ impl LanguageServer for Backend {
                 .await
                 .unwrap_or_default();
                 *state.config.write().await = resolved;
+
+                // REQ-CAT-09: register watcher with client or fall back to notify.
+                let locale_dirs = {
+                    let cfg = state.config.read().await;
+                    discover_locale_dirs(&root, &cfg)
+                };
+                if state.client_watches_files() {
+                    register_lsp_watcher(&client).await;
+                } else {
+                    start_notify_watcher(&state, &locale_dirs);
+                }
 
                 let indicators = state.config.read().await.indicators();
                 let jinja_exts = state.config.read().await.jinja_extensions.clone();
@@ -138,6 +161,22 @@ impl LanguageServer for Backend {
                 }
             }
         });
+    }
+
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        // REQ-CAT-09: client-side watcher events for .po/.pot files.
+        let mut needs_rebuild = false;
+        for event in &params.changes {
+            if !is_catalog_uri(&event.uri) {
+                continue;
+            }
+            if handle_catalog_file_event(&event.uri, event.typ, &self.state).await {
+                needs_rebuild = true;
+            }
+        }
+        if needs_rebuild {
+            self.state.trigger_rebuild();
+        }
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -280,6 +319,152 @@ async fn rebuild_catalog_index(state: &Arc<WorkspaceState>) {
     let entry_count = all_entries.len();
     *state.catalog_index.write().await = CatalogIndex::build(all_entries);
     tracing::info!(entries = entry_count, "catalog index rebuilt");
+}
+
+// ── External change handling (REQ-CAT-09/10) ─────────────────────────────────
+
+/// Register `workspace/didChangeWatchedFiles` with the client for *.po and *.pot.
+async fn register_lsp_watcher(client: &Client) {
+    let opts = DidChangeWatchedFilesRegistrationOptions {
+        watchers: vec![
+            FileSystemWatcher {
+                glob_pattern: GlobPattern::String("**/*.po".to_string()),
+                kind: None,
+            },
+            FileSystemWatcher {
+                glob_pattern: GlobPattern::String("**/*.pot".to_string()),
+                kind: None,
+            },
+        ],
+    };
+    let registration = Registration {
+        id: "babel-lsp-catalog-watcher".to_string(),
+        method: "workspace/didChangeWatchedFiles".to_string(),
+        register_options: Some(serde_json::to_value(opts).expect("serializable")),
+    };
+    if let Err(e) = client.register_capability(vec![registration]).await {
+        tracing::warn!("failed to register file watcher: {e}");
+    }
+}
+
+/// Update `catalog_files` for a single LSP file event.
+///
+/// Returns `true` when the change warrants a rebuild; `false` when the event
+/// should be ignored (e.g. the file is open in the editor — REQ-CAT-10).
+async fn handle_catalog_file_event(
+    uri: &Uri,
+    change_type: FileChangeType,
+    state: &Arc<WorkspaceState>,
+) -> bool {
+    // REQ-CAT-10: if the file is open, the buffer is authoritative — skip watcher events.
+    if state.documents.contains_key(uri) {
+        return false;
+    }
+    let Some(path) = uri.to_file_path().map(|p| p.into_owned()) else {
+        return false;
+    };
+
+    if change_type == FileChangeType::CREATED {
+        state.catalog_files.write().await.push(path);
+        return true;
+    }
+    if change_type == FileChangeType::DELETED {
+        state.catalog_files.write().await.retain(|p| p != &path);
+        return true;
+    }
+    // CHANGED — the file still exists; rebuild will re-read it from disk.
+    true
+}
+
+/// Start a native `notify` watcher over `locale_dirs` when the client doesn't
+/// support dynamic registration (REQ-CAT-09 fallback).
+fn start_notify_watcher(state: &Arc<WorkspaceState>, locale_dirs: &[PathBuf]) {
+    let (tx, mut rx) = mpsc::unbounded_channel::<notify::Event>();
+
+    let watcher_result = RecommendedWatcher::new(
+        move |res: notify::Result<notify::Event>| {
+            if let Ok(event) = res {
+                let _ = tx.send(event);
+            }
+        },
+        notify::Config::default(),
+    );
+
+    let mut watcher = match watcher_result {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::warn!("failed to create notify watcher: {e}");
+            return;
+        }
+    };
+
+    for dir in locale_dirs {
+        if let Err(e) = watcher.watch(dir, notify::RecursiveMode::Recursive) {
+            tracing::warn!("failed to watch {}: {e}", dir.display());
+        }
+    }
+
+    // Keep the watcher alive for the server's lifetime.
+    state.set_notify_watcher(watcher);
+
+    let state = Arc::clone(state);
+    tokio::task::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            handle_notify_event(event, &state).await;
+        }
+    });
+}
+
+/// Process a single notify event: update catalog_files and trigger rebuild.
+async fn handle_notify_event(event: notify::Event, state: &Arc<WorkspaceState>) {
+    let mut needs_rebuild = false;
+    for path in &event.paths {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if ext != "po" && ext != "pot" {
+            continue;
+        }
+
+        // REQ-CAT-10: ignore events for files open in the editor.
+        if is_open_in_editor(path, state) {
+            continue;
+        }
+
+        if event.kind.is_create() {
+            state.catalog_files.write().await.push(path.clone());
+            needs_rebuild = true;
+        } else if event.kind.is_remove() {
+            state.catalog_files.write().await.retain(|p| p != path);
+            needs_rebuild = true;
+        } else if event.kind.is_modify() {
+            // Rename events (Modify(Name(_))) arrive here with [old, new] paths.
+            // Use existence to distinguish: missing path was renamed away (delete),
+            // path not yet tracked was renamed in (create). Pure content changes
+            // are already tracked — just rebuild.
+            if !path.exists() {
+                state.catalog_files.write().await.retain(|p| p != path);
+            } else {
+                let mut files = state.catalog_files.write().await;
+                if !files.contains(path) {
+                    files.push(path.clone());
+                }
+            }
+            needs_rebuild = true;
+        }
+    }
+    if needs_rebuild {
+        state.trigger_rebuild();
+    }
+}
+
+/// Returns true if `path` is currently open in the editor (has an overlay buffer).
+fn is_open_in_editor(path: &Path, state: &Arc<WorkspaceState>) -> bool {
+    state.documents.iter().any(|entry| {
+        entry
+            .key()
+            .to_file_path()
+            .map(|p| p.as_ref() == path)
+            .unwrap_or(false)
+    })
 }
 
 // ── Workspace scan ────────────────────────────────────────────────────────────
@@ -619,5 +804,239 @@ mod tests {
         assert!(is_catalog_uri(&po));
         assert!(is_catalog_uri(&pot));
         assert!(!is_catalog_uri(&py));
+    }
+
+    // ── REQ-CAT-09 / REQ-CAT-10 (handle_catalog_file_event) ─────────────────
+
+    #[tokio::test]
+    async fn file_event_created_adds_to_catalog_files() {
+        // REQ-CAT-09: CREATED event registers the new file.
+        let dir = TempDir::new().unwrap();
+        let po = write_po(&dir, "de/LC_MESSAGES/messages.po", b"");
+
+        let state = Arc::new(WorkspaceState::new());
+        let uri = make_uri(&po);
+        let added = handle_catalog_file_event(&uri, FileChangeType::CREATED, &state).await;
+
+        assert!(added);
+        assert!(state.catalog_files.read().await.contains(&po));
+    }
+
+    #[tokio::test]
+    async fn file_event_deleted_removes_from_catalog_files() {
+        // REQ-CAT-09: DELETED event unregisters the file.
+        let dir = TempDir::new().unwrap();
+        let po = write_po(&dir, "de/LC_MESSAGES/messages.po", b"");
+
+        let state = Arc::new(WorkspaceState::new());
+        *state.catalog_files.write().await = vec![po.clone()];
+
+        let uri = make_uri(&po);
+        let changed = handle_catalog_file_event(&uri, FileChangeType::DELETED, &state).await;
+
+        assert!(changed);
+        assert!(!state.catalog_files.read().await.contains(&po));
+    }
+
+    #[tokio::test]
+    async fn file_event_changed_triggers_rebuild() {
+        // REQ-CAT-09: CHANGED event returns true so the caller triggers a rebuild.
+        let dir = TempDir::new().unwrap();
+        let po = write_po(&dir, "de/LC_MESSAGES/messages.po", b"");
+
+        let state = Arc::new(WorkspaceState::new());
+        *state.catalog_files.write().await = vec![po.clone()];
+
+        let uri = make_uri(&po);
+        let changed = handle_catalog_file_event(&uri, FileChangeType::CHANGED, &state).await;
+
+        assert!(changed);
+        // catalog_files is unchanged; rebuild will re-read the file.
+        assert!(state.catalog_files.read().await.contains(&po));
+    }
+
+    #[tokio::test]
+    async fn file_event_ignored_when_file_is_open() {
+        // REQ-CAT-10: watcher events for open files are silently dropped.
+        let dir = TempDir::new().unwrap();
+        let po = write_po(&dir, "de/LC_MESSAGES/messages.po", b"");
+
+        let state = Arc::new(WorkspaceState::new());
+        *state.catalog_files.write().await = vec![po.clone()];
+
+        // Simulate file open in editor.
+        state.documents.insert(
+            make_uri(&po),
+            DocumentState {
+                rope: Rope::from_str(""),
+                version: 1,
+            },
+        );
+
+        let uri = make_uri(&po);
+        let changed = handle_catalog_file_event(&uri, FileChangeType::CHANGED, &state).await;
+
+        assert!(!changed, "event for an open file must be ignored");
+    }
+
+    #[tokio::test]
+    async fn notify_event_create_adds_file() {
+        // REQ-CAT-09 fallback: notify Create event adds path to catalog_files.
+        let dir = TempDir::new().unwrap();
+        let po = write_po(&dir, "de/LC_MESSAGES/messages.po", b"");
+
+        let state = Arc::new(WorkspaceState::new());
+        let event = notify::Event {
+            kind: notify::EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![po.clone()],
+            attrs: Default::default(),
+        };
+        handle_notify_event(event, &state).await;
+
+        assert!(state.catalog_files.read().await.contains(&po));
+    }
+
+    #[tokio::test]
+    async fn notify_event_remove_drops_file() {
+        // REQ-CAT-09 fallback: notify Remove event drops path from catalog_files.
+        let dir = TempDir::new().unwrap();
+        let po = write_po(&dir, "de/LC_MESSAGES/messages.po", b"");
+
+        let state = Arc::new(WorkspaceState::new());
+        *state.catalog_files.write().await = vec![po.clone()];
+
+        let event = notify::Event {
+            kind: notify::EventKind::Remove(notify::event::RemoveKind::File),
+            paths: vec![po.clone()],
+            attrs: Default::default(),
+        };
+        handle_notify_event(event, &state).await;
+
+        assert!(!state.catalog_files.read().await.contains(&po));
+    }
+
+    #[tokio::test]
+    async fn notify_event_modify_triggers_rebuild_for_non_open_file() {
+        // Content change to a tracked, non-open file must trigger rebuild.
+        let dir = TempDir::new().unwrap();
+        let po = write_po(&dir, "de/LC_MESSAGES/messages.po", b"");
+
+        let state = Arc::new(WorkspaceState::new());
+        *state.catalog_files.write().await = vec![po.clone()];
+
+        let (tx, mut rx) = watch::channel(());
+        state.set_rebuild_trigger(tx);
+
+        let event = notify::Event {
+            kind: notify::EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Content,
+            )),
+            paths: vec![po.clone()],
+            attrs: Default::default(),
+        };
+        handle_notify_event(event, &state).await;
+
+        // Must not timeout — rebuild was triggered.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), rx.changed())
+                .await
+                .is_ok(),
+            "rebuild must be triggered for a modified non-open file"
+        );
+        // File still tracked (content-change, not removed).
+        assert!(state.catalog_files.read().await.contains(&po));
+    }
+
+    #[tokio::test]
+    async fn notify_event_rename_removes_old_path_and_adds_new_path() {
+        // Rename shows up as Modify(Name) with [old, new] paths.
+        // Old path removed (doesn't exist), new path added.
+        let dir = TempDir::new().unwrap();
+        let old_po = dir.path().join("de/LC_MESSAGES/old.po");
+        let new_po = write_po(&dir, "de/LC_MESSAGES/new.po", b"");
+
+        let state = Arc::new(WorkspaceState::new());
+        *state.catalog_files.write().await = vec![old_po.clone()];
+
+        let event = notify::Event {
+            kind: notify::EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::Both,
+            )),
+            paths: vec![old_po.clone(), new_po.clone()],
+            attrs: Default::default(),
+        };
+        handle_notify_event(event, &state).await;
+
+        let files = state.catalog_files.read().await;
+        assert!(
+            !files.contains(&old_po),
+            "old path must be removed after rename"
+        );
+        assert!(
+            files.contains(&new_po),
+            "new path must be added after rename"
+        );
+    }
+
+    #[tokio::test]
+    async fn notify_event_ignored_for_open_file() {
+        // REQ-CAT-10: notify Modify events for open files are dropped.
+        let dir = TempDir::new().unwrap();
+        let po = write_po(&dir, "de/LC_MESSAGES/messages.po", b"");
+
+        let state = Arc::new(WorkspaceState::new());
+        // File open in editor.
+        state.documents.insert(
+            make_uri(&po),
+            DocumentState {
+                rope: Rope::from_str(""),
+                version: 1,
+            },
+        );
+
+        let (tx, mut rx) = watch::channel(());
+        state.set_rebuild_trigger(tx);
+
+        let event = notify::Event {
+            kind: notify::EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Content,
+            )),
+            paths: vec![po.clone()],
+            attrs: Default::default(),
+        };
+        handle_notify_event(event, &state).await;
+
+        // rebuild must NOT have been triggered — timeout means no send occurred.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), rx.changed())
+                .await
+                .is_err(),
+            "rebuild should not be triggered for an open file"
+        );
+    }
+
+    #[test]
+    fn is_open_in_editor_true_when_document_present() {
+        let dir = TempDir::new().unwrap();
+        let po = dir.path().join("messages.po");
+        std::fs::write(&po, b"").unwrap();
+
+        let state = Arc::new(WorkspaceState::new());
+        state.documents.insert(
+            make_uri(&po),
+            DocumentState {
+                rope: Rope::from_str(""),
+                version: 1,
+            },
+        );
+        assert!(is_open_in_editor(&po, &state));
+    }
+
+    #[test]
+    fn is_open_in_editor_false_when_no_document() {
+        let dir = TempDir::new().unwrap();
+        let po = dir.path().join("messages.po");
+        let state = Arc::new(WorkspaceState::new());
+        assert!(!is_open_in_editor(&po, &state));
     }
 }
