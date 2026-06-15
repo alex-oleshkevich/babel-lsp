@@ -11,6 +11,7 @@ use ropey::Rope;
 use tokio::sync::{Mutex, RwLock};
 use tower_lsp_server::ls_types::Uri;
 
+use crate::catalog::index::CatalogIndex;
 use crate::config::Config;
 
 pub struct DocumentState {
@@ -18,6 +19,7 @@ pub struct DocumentState {
     pub version: i32,
 }
 
+#[allow(dead_code)]
 pub struct WorkspaceState {
     pub documents: DashMap<Uri, DocumentState>,
     doc_locks: DashMap<Uri, Arc<Mutex<()>>>,
@@ -25,6 +27,7 @@ pub struct WorkspaceState {
     pub workspace_root: OnceLock<PathBuf>,
     pub config: RwLock<Config>,
     pub catalog_files: RwLock<Vec<PathBuf>>,
+    pub catalog_index: RwLock<CatalogIndex>,
 }
 
 impl WorkspaceState {
@@ -36,6 +39,7 @@ impl WorkspaceState {
             workspace_root: OnceLock::new(),
             config: RwLock::new(Config::default()),
             catalog_files: RwLock::new(vec![]),
+            catalog_index: RwLock::new(CatalogIndex::default()),
         }
     }
 
