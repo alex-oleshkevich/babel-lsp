@@ -12,7 +12,11 @@ use server::Backend;
 use tower_lsp_server::{LspService, Server};
 
 #[derive(Parser)]
-#[command(name = "babel-lsp", version, about = "Language server for Python Babel i18n")]
+#[command(
+    name = "babel-lsp",
+    version,
+    about = "Language server for Python Babel i18n"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

@@ -14,11 +14,17 @@ pub struct CatalogKey {
 #[allow(dead_code)]
 impl CatalogKey {
     pub fn new(msgid: impl Into<String>) -> Self {
-        Self { msgid: msgid.into(), msgctxt: None }
+        Self {
+            msgid: msgid.into(),
+            msgctxt: None,
+        }
     }
 
     pub fn with_ctx(msgid: impl Into<String>, msgctxt: impl Into<String>) -> Self {
-        Self { msgid: msgid.into(), msgctxt: Some(msgctxt.into()) }
+        Self {
+            msgid: msgid.into(),
+            msgctxt: Some(msgctxt.into()),
+        }
     }
 }
 
@@ -91,7 +97,12 @@ impl CatalogIndex {
             }
         }
 
-        Self { entries, pot_entries, locales, domains }
+        Self {
+            entries,
+            pot_entries,
+            locales,
+            domains,
+        }
     }
 
     /// All entries for a msgid across all locales and domains.
@@ -168,7 +179,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec![msgstr.into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: PathBuf::from("/locale/messages.po"),
             line: 1,
         }
@@ -206,7 +220,10 @@ mod tests {
             msgctxt: Some("ecommerce".into()),
             msgid_plural: None,
             msgstr: vec!["Kasse".into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: "/locale/de/LC_MESSAGES/messages.po".into(),
             line: 10,
         };
@@ -263,7 +280,7 @@ mod tests {
     fn missing_locales_finds_untranslated() {
         let entries = vec![
             make_entry("de", "Checkout", "Kasse"),
-            make_entry("fr", "Checkout", ""),  // empty → missing
+            make_entry("fr", "Checkout", ""), // empty → missing
         ];
         let idx = CatalogIndex::build(entries);
         let missing = idx.missing_locales(&CatalogKey::new("Checkout"));

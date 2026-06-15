@@ -163,15 +163,9 @@ fn unescape_po(s: &str) -> String {
 ///
 /// Parse failures return `Err`; the caller logs and skips.
 #[allow(dead_code)]
-pub fn load_po_file(
-    path: &Path,
-    locale: &str,
-    domain: &str,
-) -> Result<Vec<CatalogEntry>, String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let catalog =
-        po_file::parse(path).map_err(|e| format!("{}: {e}", path.display()))?;
+pub fn load_po_file(path: &Path, locale: &str, domain: &str) -> Result<Vec<CatalogEntry>, String> {
+    let content = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let catalog = po_file::parse(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let line_map = PoLineMap::build(&content);
 
     let mut entries = vec![];
@@ -193,9 +187,7 @@ pub fn load_po_file(
             None
         };
         let msgstr = if msg.is_plural() {
-            msg.msgstr_plural()
-                .cloned()
-                .unwrap_or_default()
+            msg.msgstr_plural().cloned().unwrap_or_default()
         } else {
             match msg.msgstr() {
                 Ok(s) => vec![s.to_string()],
@@ -280,8 +272,7 @@ mod tests {
         let dir2 = TempDir::new().unwrap();
         mk(&dir1, "de/LC_MESSAGES/messages.po");
         mk(&dir2, "fr/LC_MESSAGES/messages.po");
-        let found =
-            discover_catalogs(&[dir1.path().to_path_buf(), dir2.path().to_path_buf()]);
+        let found = discover_catalogs(&[dir1.path().to_path_buf(), dir2.path().to_path_buf()]);
         assert_eq!(found.len(), 2);
     }
 
@@ -318,8 +309,7 @@ mod tests {
     #[test]
     fn unknown_extension_returns_none() {
         assert!(
-            locale_domain_from_po_path(Path::new("/locale/de/LC_MESSAGES/messages.txt"))
-                .is_none()
+            locale_domain_from_po_path(Path::new("/locale/de/LC_MESSAGES/messages.txt")).is_none()
         );
     }
 
@@ -420,9 +410,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_po(&dir, "de/LC_MESSAGES/messages.po", MINIMAL_PO);
         let entries = load_po_file(&path, "de", "messages").unwrap();
-        assert!(entries
-            .iter()
-            .all(|e| e.locale == "de" && e.domain == "messages"));
+        assert!(
+            entries
+                .iter()
+                .all(|e| e.locale == "de" && e.domain == "messages")
+        );
     }
 
     #[test]

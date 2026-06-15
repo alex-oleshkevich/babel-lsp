@@ -46,40 +46,58 @@ mod tests {
     #[test]
     fn utf16_ascii_offset() {
         let r = rope("hello\nworld\n");
-        assert_eq!(lsp_pos_to_char_offset(&r, pos(1, 3), PositionEncoding::Utf16), 9);
+        assert_eq!(
+            lsp_pos_to_char_offset(&r, pos(1, 3), PositionEncoding::Utf16),
+            9
+        );
     }
 
     #[test]
     fn utf8_ascii_offset() {
         let r = rope("hello\nworld\n");
-        assert_eq!(lsp_pos_to_char_offset(&r, pos(1, 3), PositionEncoding::Utf8), 9);
+        assert_eq!(
+            lsp_pos_to_char_offset(&r, pos(1, 3), PositionEncoding::Utf8),
+            9
+        );
     }
 
     #[test]
     fn utf16_multibyte_bmp() {
         // 'é' (U+00E9) is 1 UTF-16 unit; col 3 lands on it, col 4 is past it
         let r = rope("café\n");
-        assert_eq!(lsp_pos_to_char_offset(&r, pos(0, 4), PositionEncoding::Utf16), 4);
+        assert_eq!(
+            lsp_pos_to_char_offset(&r, pos(0, 4), PositionEncoding::Utf16),
+            4
+        );
     }
 
     #[test]
     fn utf8_multibyte_bmp() {
         // 'é' (U+00E9) is 2 UTF-8 bytes; byte 5 is past it
         let r = rope("café\n");
-        assert_eq!(lsp_pos_to_char_offset(&r, pos(0, 5), PositionEncoding::Utf8), 4);
+        assert_eq!(
+            lsp_pos_to_char_offset(&r, pos(0, 5), PositionEncoding::Utf8),
+            4
+        );
     }
 
     #[test]
     fn utf16_surrogate_pair() {
         // 😀 (U+1F600) occupies 2 UTF-16 code units; col 3 is 'b'
         let r = rope("a😀b\n");
-        assert_eq!(lsp_pos_to_char_offset(&r, pos(0, 3), PositionEncoding::Utf16), 2);
+        assert_eq!(
+            lsp_pos_to_char_offset(&r, pos(0, 3), PositionEncoding::Utf16),
+            2
+        );
     }
 
     #[test]
     fn utf16_col_past_end_clamps() {
         let r = rope("hi\n");
-        assert_eq!(lsp_pos_to_char_offset(&r, pos(0, 99), PositionEncoding::Utf16), 3);
+        assert_eq!(
+            lsp_pos_to_char_offset(&r, pos(0, 99), PositionEncoding::Utf16),
+            3
+        );
     }
 
     #[test]

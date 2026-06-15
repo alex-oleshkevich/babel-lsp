@@ -1,11 +1,10 @@
-use std::{path::{Path, PathBuf}, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use ropey::Rope;
-use tower_lsp_server::{
-    Client, LanguageServer,
-    jsonrpc::Result,
-    ls_types::*,
-};
+use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 use walkdir::WalkDir;
 
 use crate::config::resolve_config;
@@ -196,7 +195,9 @@ fn scan_workspace(
         if ext == "po" || ext == "pot" {
             catalog_files.push(path.to_path_buf());
         } else if (ext == "py"
-            || jinja_extensions.iter().any(|je| je.trim_start_matches('.') == ext))
+            || jinja_extensions
+                .iter()
+                .any(|je| je.trim_start_matches('.') == ext))
             && has_indicator(path, indicators)
         {
             source_count += 1;
@@ -210,9 +211,10 @@ fn has_indicator(path: &Path, indicators: &[String]) -> bool {
     let Ok(bytes) = std::fs::read(path) else {
         return false;
     };
-    indicators.iter().filter(|ind| !ind.is_empty()).any(|ind| {
-        bytes.windows(ind.len()).any(|w| w == ind.as_bytes())
-    })
+    indicators
+        .iter()
+        .filter(|ind| !ind.is_empty())
+        .any(|ind| bytes.windows(ind.len()).any(|w| w == ind.as_bytes()))
 }
 
 fn apply_change(rope: &mut Rope, change: TextDocumentContentChangeEvent, enc: PositionEncoding) {
@@ -242,11 +244,18 @@ mod tests {
     }
 
     fn range(sl: u32, sc: u32, el: u32, ec: u32) -> Range {
-        Range { start: pos(sl, sc), end: pos(el, ec) }
+        Range {
+            start: pos(sl, sc),
+            end: pos(el, ec),
+        }
     }
 
     fn change(r: Option<Range>, text: &str) -> TextDocumentContentChangeEvent {
-        TextDocumentContentChangeEvent { range: r, range_length: None, text: text.to_string() }
+        TextDocumentContentChangeEvent {
+            range: r,
+            range_length: None,
+            text: text.to_string(),
+        }
     }
 
     fn write_file(dir: &TempDir, name: &str, content: &[u8]) -> PathBuf {
@@ -258,7 +267,11 @@ mod tests {
     #[test]
     fn apply_full_sync_replaces_rope() {
         let mut rope = Rope::from_str("old content");
-        apply_change(&mut rope, change(None, "new content"), PositionEncoding::Utf16);
+        apply_change(
+            &mut rope,
+            change(None, "new content"),
+            PositionEncoding::Utf16,
+        );
         assert_eq!(rope.to_string(), "new content");
     }
 
@@ -298,8 +311,16 @@ mod tests {
     #[test]
     fn apply_multiple_changes_in_order() {
         let mut rope = Rope::from_str("abc\n");
-        apply_change(&mut rope, change(Some(range(0, 1, 0, 1)), "X"), PositionEncoding::Utf16);
-        apply_change(&mut rope, change(Some(range(0, 3, 0, 3)), "Y"), PositionEncoding::Utf16);
+        apply_change(
+            &mut rope,
+            change(Some(range(0, 1, 0, 1)), "X"),
+            PositionEncoding::Utf16,
+        );
+        apply_change(
+            &mut rope,
+            change(Some(range(0, 3, 0, 3)), "Y"),
+            PositionEncoding::Utf16,
+        );
         assert_eq!(rope.to_string(), "aXbYc\n");
     }
 
@@ -311,7 +332,7 @@ mod tests {
         write_file(&dir, "views.py", b"x = 1\n");
 
         let indicators = vec!["_(".to_string()];
-        let (src, catalogs) = scan_workspace(dir.path(),&indicators, &[]);
+        let (src, catalogs) = scan_workspace(dir.path(), &indicators, &[]);
 
         assert_eq!(src, 0);
         assert_eq!(catalogs.len(), 2);
@@ -323,7 +344,7 @@ mod tests {
         write_file(&dir, "views.py", b"msg = _(\"Hello\")\n");
 
         let indicators = vec!["_(".to_string()];
-        let (src, _) = scan_workspace(dir.path(),&indicators, &[]);
+        let (src, _) = scan_workspace(dir.path(), &indicators, &[]);
 
         assert_eq!(src, 1);
     }
@@ -334,7 +355,7 @@ mod tests {
         write_file(&dir, "views.py", b"x = 42\n");
 
         let indicators = vec!["_(".to_string()];
-        let (src, _) = scan_workspace(dir.path(),&indicators, &[]);
+        let (src, _) = scan_workspace(dir.path(), &indicators, &[]);
 
         assert_eq!(src, 0);
     }
@@ -342,11 +363,15 @@ mod tests {
     #[test]
     fn scan_includes_jinja_with_indicator() {
         let dir = TempDir::new().unwrap();
-        write_file(&dir, "template.html", b"<p>{% trans %}Hello{% endtrans %}</p>");
+        write_file(
+            &dir,
+            "template.html",
+            b"<p>{% trans %}Hello{% endtrans %}</p>",
+        );
 
         let indicators = vec!["{% trans".to_string()];
         let jinja_exts = vec![".html".to_string()];
-        let (src, _) = scan_workspace(dir.path(),&indicators, &jinja_exts);
+        let (src, _) = scan_workspace(dir.path(), &indicators, &jinja_exts);
 
         assert_eq!(src, 1);
     }

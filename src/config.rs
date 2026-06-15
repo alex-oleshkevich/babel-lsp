@@ -181,9 +181,7 @@ impl PartialConfig {
             },
             detect_hardcoded_strings: self.detect_hardcoded_strings.unwrap_or(false),
             inlay_hint_locale: self.inlay_hint_locale,
-            position_encoding: self
-                .position_encoding
-                .unwrap_or(defaults.position_encoding),
+            position_encoding: self.position_encoding.unwrap_or(defaults.position_encoding),
             diagnostics: DiagnosticsConfig {
                 select: self
                     .diagnostics
