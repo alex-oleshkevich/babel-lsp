@@ -60,12 +60,15 @@ You have standing permission to `git add`, `git commit`, and `git push` at any t
 
 ## Task Workflow (per issue)
 
-For each task, follow this sequence — no shortcuts:
+For each task, follow this sequence **without stopping between steps**:
 
 1. **Implement** — write the code for the task
 2. **Tests** — write unit tests, then e2e tests; run them all and ensure they pass
 3. **Self-review** — run `/self-review` and address any findings
-4. **Commit** — commit the work, then move to the next task
+4. **Commit** — commit immediately after self-review passes, no pausing
+5. **Next task** — claim and start the next task immediately
+
+**NEVER stop and wait after self-review. Commit and keep going.**
 
 ## Build & Test
 

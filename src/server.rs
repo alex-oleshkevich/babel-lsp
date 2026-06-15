@@ -112,15 +112,18 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let uri = params.text_document.uri;
-        let lock = self.state.doc_lock(&uri);
-        let _guard = lock.lock().await;
-
-        let doc = DocumentState {
-            rope: Rope::from_str(&params.text_document.text),
-            version: params.text_document.version,
-        };
-        self.state.documents.insert(uri, doc);
+        let uri = params.text_document.uri.clone();
+        {
+            let lock = self.state.doc_lock(&uri);
+            let _guard = lock.lock().await;
+            let doc = DocumentState {
+                rope: Rope::from_str(&params.text_document.text),
+                version: params.text_document.version,
+            };
+            self.state.documents.insert(uri.clone(), doc);
+        }
+        // REQ-ARCH-10: every opened file receives a publish (e2e "server saw this" signal)
+        self.client.publish_diagnostics(uri, vec![], None).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {

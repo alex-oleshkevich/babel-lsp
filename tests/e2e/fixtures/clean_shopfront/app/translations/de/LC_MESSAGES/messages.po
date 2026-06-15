@@ -1,0 +1,11 @@
+# German translations
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Checkout"
+msgstr "Kasse"
+
+msgid "Your cart is empty"
+msgstr "Ihr Warenkorb ist leer"
