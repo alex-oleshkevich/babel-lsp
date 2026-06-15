@@ -12,7 +12,8 @@ use walkdir::WalkDir;
 
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
-use crate::config::{discover_locale_dirs, resolve_config};
+use crate::config::{Config, discover_locale_dirs, resolve_config};
+use crate::features::completion;
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -87,6 +88,8 @@ impl LanguageServer for Backend {
                         will_save_wait_until: None,
                     },
                 )),
+                // REQ-CPL-02: quote characters trigger msgid completion.
+                completion_provider: Some(completion_provider_options()),
                 ..ServerCapabilities::default()
             },
         })
@@ -161,6 +164,32 @@ impl LanguageServer for Backend {
                 }
             }
         });
+    }
+
+    async fn completion(
+        &self,
+        params: CompletionParams,
+    ) -> Result<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let pos = params.text_document_position.position;
+        let enc = if self.state.is_utf8_encoding() {
+            PositionEncoding::Utf8
+        } else {
+            PositionEncoding::Utf16
+        };
+
+        let Some(doc) = self.state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let rope = doc.rope.clone();
+        drop(doc);
+
+        let text = rope.to_string();
+        let index = self.state.catalog_index.read().await;
+        let config = self.state.config.read().await;
+        let items = extract_and_complete(&rope, &text, &uri, pos, enc, &index, &config);
+
+        Ok(Some(CompletionResponse::Array(items)))
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
@@ -319,6 +348,50 @@ async fn rebuild_catalog_index(state: &Arc<WorkspaceState>) {
     let entry_count = all_entries.len();
     *state.catalog_index.write().await = CatalogIndex::build(all_entries);
     tracing::info!(entries = entry_count, "catalog index rebuilt");
+}
+
+// ── Completion dispatch ───────────────────────────────────────────────────────
+
+/// Extract translation calls for `uri` and run completion.
+///
+/// Picks the Python or Jinja extractor based on the file extension; returns
+/// an empty list for any other file type.
+fn extract_and_complete(
+    rope: &ropey::Rope,
+    text: &str,
+    uri: &Uri,
+    pos: Position,
+    enc: PositionEncoding,
+    index: &CatalogIndex,
+    config: &Config,
+) -> Vec<CompletionItem> {
+    let ext = uri
+        .to_file_path()
+        .and_then(|p| p.extension().and_then(|e| e.to_str()).map(str::to_owned))
+        .unwrap_or_default();
+
+    let extra = config
+        .extra_keywords
+        .iter()
+        .filter_map(|kw| {
+            crate::extract::types::TranslationFunc::from_name(kw)
+                .map(|f| (kw.clone(), f))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let calls = if ext == "py" {
+        crate::extract::python::extract(text.as_bytes(), &extra)
+    } else if config
+        .jinja_extensions
+        .iter()
+        .any(|je| je.trim_start_matches('.') == ext)
+    {
+        crate::extract::jinja::extract(text.as_bytes(), &extra)
+    } else {
+        return vec![];
+    };
+
+    completion::complete(rope, &calls, pos, enc, index)
 }
 
 // ── External change handling (REQ-CAT-09/10) ─────────────────────────────────
@@ -509,6 +582,13 @@ fn has_indicator(path: &Path, indicators: &[String]) -> bool {
         .iter()
         .filter(|ind| !ind.is_empty())
         .any(|ind| bytes.windows(ind.len()).any(|w| w == ind.as_bytes()))
+}
+
+fn completion_provider_options() -> CompletionOptions {
+    CompletionOptions {
+        trigger_characters: Some(vec!["\"".to_string(), "'".to_string()]),
+        ..CompletionOptions::default()
+    }
 }
 
 fn apply_change(rope: &mut Rope, change: TextDocumentContentChangeEvent, enc: PositionEncoding) {
@@ -1038,5 +1118,15 @@ mod tests {
         let po = dir.path().join("messages.po");
         let state = Arc::new(WorkspaceState::new());
         assert!(!is_open_in_editor(&po, &state));
+    }
+
+    // ── REQ-CPL-02 ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn req_cpl_02_advertises_quote_trigger_characters() {
+        let opts = completion_provider_options();
+        let triggers = opts.trigger_characters.as_deref().unwrap_or_default();
+        assert!(triggers.contains(&"\"".to_string()), "double-quote trigger missing");
+        assert!(triggers.contains(&"'".to_string()), "single-quote trigger missing");
     }
 }

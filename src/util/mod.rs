@@ -7,6 +7,22 @@ pub enum PositionEncoding {
     Utf16,
 }
 
+pub fn char_offset_to_lsp_pos(rope: &Rope, char_offset: usize, enc: PositionEncoding) -> Position {
+    let char_offset = char_offset.min(rope.len_chars());
+    let line = rope.char_to_line(char_offset);
+    let line_start = rope.line_to_char(line);
+    let col_chars = char_offset - line_start;
+    let line_slice = rope.line(line);
+    let character: usize = match enc {
+        PositionEncoding::Utf8 => line_slice.chars().take(col_chars).map(|c| c.len_utf8()).sum(),
+        PositionEncoding::Utf16 => line_slice.chars().take(col_chars).map(|c| c.len_utf16()).sum(),
+    };
+    Position {
+        line: line as u32,
+        character: character as u32,
+    }
+}
+
 pub fn lsp_pos_to_char_offset(rope: &Rope, pos: Position, enc: PositionEncoding) -> usize {
     let line = (pos.line as usize).min(rope.len_lines().saturating_sub(1));
     let character = pos.character as usize;
