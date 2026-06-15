@@ -2,7 +2,7 @@
 
 > **Status:** Draft
 >
-> **Version:** 0.2   ·   **Last updated:** 2026-06-15
+> **Version:** 0.3   ·   **Last updated:** 2026-06-15
 >
 > **Purpose:** How babel-lsp ships to its first-class editors — a Zed extension, and Neovim and Helix configuration — plus the generic stdio path for any LSP client.
 >
@@ -81,9 +81,9 @@ babel-lsp runs *alongside* the user's Python LSP, never instead of it. Its diagn
 
 ### 5.2 Zed (first-class, ships in-repo)
 
-Zed is the only target needing code. Zed cannot launch a third-party language server from settings alone — a thin extension must register it. babel-lsp ships that extension under `editors/zed/`. It carries no grammar and no features; its whole job is to start the binary.
+Zed is the only target needing code. Zed cannot launch a third-party language server from settings alone — a thin extension must register it. babel-lsp ships that extension under `editors/zed/`. Two non-obvious things make it actually work, both learned the hard way from the sibling fastapi-lsp extension: the extension must **define the PO language itself** (Zed ships no built-in one), and it must **find the binary even on a GUI launch**, where Zed may not have the shell `PATH` ([zed#19779](https://github.com/zed-industries/zed/issues/19779)).
 
-The manifest declares the extension and the languages the server attaches to. Python and PO are the two Zed built-in language names babel-lsp targets:
+The manifest registers the server for two languages. `Python` is Zed-built-in; **`PO` is defined by this extension** (REQ-EDIT-04) — Zed has no PO/gettext language, so without that definition the server never attaches to `.po`/`.pot` files at all:
 
 ```toml
 # editors/zed/extension.toml
@@ -99,29 +99,50 @@ repository = "https://github.com/your-org/babel-lsp"
 languages = ["Python", "PO"]
 ```
 
-The Rust glue implements one hook — `language_server_command` — returning the command Zed should spawn. It launches the binary from `PATH` with the stdio transport:
+The extension then **defines the PO language**, so `.po`/`.pot` buffers are a language Zed recognizes and the server can bind to. A grammar is optional — without one the catalog shows as plain text but the LSP still attaches; with a vendored `tree-sitter-po` it also highlights:
+
+```toml
+# editors/zed/languages/po/config.toml
+name = "PO"
+path_suffixes = ["po", "pot"]
+line_comments = ["# "]
+# grammar = "po"   # optional — only for syntax highlighting
+```
+
+The Rust glue implements one hook — `language_server_command` — returning the command Zed should spawn. It must locate the binary robustly: `worktree.which` uses the worktree's captured environment, but on a first GUI launch that environment can lack the shell `PATH` (zed#19779), so it falls back to the locations babel-lsp actually installs to — the project virtualenv (`pip install babel-lsp` inside it), the pip user dir, then the cargo dir — and passes the worktree environment through so the spawned server can in turn find `pybabel` ([F13](F13-catalog-commands.md)):
 
 ```rust
 // editors/zed/src/lib.rs
 fn language_server_command(
     &mut self,
-    language_server_id: &zed::LanguageServerId,
-    _worktree: &zed::Worktree,
+    _language_server_id: &zed::LanguageServerId,   // ignore the id; we serve one server
+    worktree: &zed::Worktree,
 ) -> Result<zed::Command> {
-    match language_server_id.as_ref() {
-        "babel_lsp" | "babel-lsp" => Ok(zed::Command {
-            command: "babel-lsp".to_string(),
-            args: vec!["lsp".to_string(), "--stdio".to_string()],
-            env: Default::default(),
-        }),
-        other => Err(format!("unsupported language server id: {other}").into()),
-    }
+    let binary = worktree
+        .which("babel-lsp")
+        .or_else(|| first_existing(&[
+            format!("{}/.venv/bin/babel-lsp", worktree.root_path()),
+            format!("{}/.local/bin/babel-lsp", home()?),   // pip --user
+            format!("{}/.cargo/bin/babel-lsp", home()?),   // cargo install
+        ]))
+        .ok_or("babel-lsp not found. Install with: pip install babel-lsp")?;
+    Ok(zed::Command {
+        command: binary,
+        args: vec!["lsp".to_string(), "--stdio".to_string()],
+        env: worktree.shell_env(),   // so the server (and its pybabel subprocess) inherits the venv/PATH
+    })
 }
 ```
 
-**REQ-EDIT-04 — Zed extension is LSP-only and PATH-first.**
+**REQ-EDIT-04 — The Zed extension defines the PO language and finds the binary robustly.**
 
-The extension declares no grammars and bundles no features. It locates `babel-lsp` on `PATH`. It registers for Zed's `Python` and `PO` languages so the server attaches in both `.py` and `.po` buffers.
+The extension carries no features beyond three essentials, each a fix for a real failure mode:
+
+1. **It defines the `PO` language** (`languages/po/config.toml`, suffixes `po`/`pot`). Zed has no built-in PO/gettext language, so without this the server silently never attaches to catalogs — the single most important thing the extension does. `Python` is built-in and needs no definition. (`Jinja2` is not built-in either; templates are served when the user also has a Jinja2 language extension installed — babel-lsp does not hard-depend on one.)
+2. **It locates the binary with `worktree.which` + fallbacks**, not a bare command name. On a first GUI launch Zed may not have the shell `PATH` (zed#19779), so a bare `"babel-lsp"` fails to resolve; the fallback chain (venv, pip-user, cargo) and a clear "install with `pip install babel-lsp`" error keep it working. It passes the worktree environment through so the server can find `pybabel`.
+3. **It ignores the `language_server_id`** and serves the one server, sidestepping the `babel_lsp`/`babel-lsp` underscore-vs-hyphen mismatch between the manifest and the code.
+
+> **Note:** the `zed_extension_api` crate version (and the Wasm target, `wasip1` vs `wasip2`) must track the user's Zed version — Zed's extension API moves, and a mismatch fails to load. Pin it in `editors/zed/Cargo.toml` and bump on Zed API releases.
 
 Declaring a server in a Zed extension does not make Zed run it beside the default Python server. The user opts in by naming it in settings; the `"..."` entry keeps the built-in servers running:
 
@@ -225,5 +246,6 @@ A teammate on Zed installs the in-repo extension, then adds the §5.2 settings o
 
 ## 10. Changelog
 
+- **2026-06-15** — v0.3: hardened the Zed extension against real failures found in the sibling fastapi-lsp extension (REQ-EDIT-04) — the extension now **defines the PO language** (`languages/po/config.toml`), since Zed has no built-in one and the server otherwise never attaches to catalogs; binary discovery uses `worktree.which` + venv/pip/cargo fallbacks for the GUI-launch missing-`PATH` case (zed#19779) and passes the worktree env through so `pybabel` is found; added the `zed_extension_api` version-pinning caveat and the Jinja2-not-built-in note.
 - **2026-06-15** — v0.2: resolved OQ-ARCH-2 to **stdio only** — removed the `--tcp`/`--http` references from REQ-EDIT-06 and the launch commands.
 - **2026-06-15** — Initial draft: first-class Zed extension (LSP-only, PATH-first), Neovim and Helix config snippets, the generic stdio path for VS Code and others, the shared filetype/root table, and the transport story.
