@@ -8,7 +8,7 @@ use std::{
 
 use dashmap::DashMap;
 use ropey::Rope;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, watch};
 use tower_lsp_server::ls_types::Uri;
 
 use crate::catalog::index::CatalogIndex;
@@ -28,6 +28,7 @@ pub struct WorkspaceState {
     pub config: RwLock<Config>,
     pub catalog_files: RwLock<Vec<PathBuf>>,
     pub catalog_index: RwLock<CatalogIndex>,
+    rebuild_tx: OnceLock<watch::Sender<()>>,
 }
 
 impl WorkspaceState {
@@ -40,6 +41,7 @@ impl WorkspaceState {
             config: RwLock::new(Config::default()),
             catalog_files: RwLock::new(vec![]),
             catalog_index: RwLock::new(CatalogIndex::default()),
+            rebuild_tx: OnceLock::new(),
         }
     }
 
@@ -56,5 +58,19 @@ impl WorkspaceState {
 
     pub fn is_utf8_encoding(&self) -> bool {
         self.utf8_encoding.load(Ordering::Relaxed)
+    }
+
+    /// Wire up the channel used by the debounced rebuild task.
+    pub fn set_rebuild_trigger(&self, tx: watch::Sender<()>) {
+        let _ = self.rebuild_tx.set(tx);
+    }
+
+    /// Signal that the catalog index should be rebuilt.
+    ///
+    /// No-op if [`set_rebuild_trigger`] has not been called yet.
+    pub fn trigger_rebuild(&self) {
+        if let Some(tx) = self.rebuild_tx.get() {
+            let _ = tx.send(());
+        }
     }
 }

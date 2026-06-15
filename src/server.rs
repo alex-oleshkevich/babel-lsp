@@ -1,12 +1,16 @@
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 use ropey::Rope;
+use tokio::sync::watch;
 use tower_lsp_server::{Client, LanguageServer, jsonrpc::Result, ls_types::*};
 use walkdir::WalkDir;
 
+use crate::catalog::index::CatalogIndex;
+use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
 use crate::config::resolve_config;
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
@@ -82,10 +86,29 @@ impl LanguageServer for Backend {
             .log_message(MessageType::INFO, "babel-lsp initialized")
             .await;
 
+        // Spin up the debounced catalog-rebuild task (REQ-CAT-08).
+        let (rebuild_tx, mut rebuild_rx) = watch::channel(());
+        self.state.set_rebuild_trigger(rebuild_tx);
+
+        let state_for_rebuild = Arc::clone(&self.state);
+        tokio::task::spawn(async move {
+            loop {
+                if rebuild_rx.changed().await.is_err() {
+                    break; // sender dropped — server is shutting down
+                }
+                // Absorb burst: keep resetting the 300 ms window until quiet.
+                while tokio::time::timeout(Duration::from_millis(300), rebuild_rx.changed())
+                    .await
+                    .is_ok()
+                {}
+                rebuild_catalog_index(&state_for_rebuild).await;
+            }
+        });
+
+        // Workspace scan — populates catalog_files, then triggers the initial rebuild.
         let state = Arc::clone(&self.state);
         tokio::task::spawn(async move {
             if let Some(root) = state.workspace_root.get().cloned() {
-                // Resolve config from disk before scanning
                 let resolved = tokio::task::spawn_blocking({
                     let root = root.clone();
                     move || resolve_config(&root)
@@ -109,6 +132,7 @@ impl LanguageServer for Backend {
                             "workspace scan complete"
                         );
                         *state.catalog_files.write().await = catalog_files;
+                        state.trigger_rebuild(); // REQ-CAT-08: build initial index
                     }
                     Err(e) => tracing::error!("workspace scan panicked: {e}"),
                 }
@@ -152,6 +176,10 @@ impl LanguageServer for Backend {
                 apply_change(&mut doc.rope, change, enc);
             }
         }
+
+        if is_catalog_uri(&uri) {
+            self.state.trigger_rebuild();
+        }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -164,6 +192,10 @@ impl LanguageServer for Backend {
                 doc.rope = Rope::from_str(&text);
             }
         }
+
+        if is_catalog_uri(&uri) {
+            self.state.trigger_rebuild();
+        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -172,8 +204,85 @@ impl LanguageServer for Backend {
         let _guard = lock.lock().await;
 
         self.state.documents.remove(&uri);
+
+        // Revert to disk: removing the buffer overlay means the next rebuild
+        // will re-read the saved file instead.
+        if is_catalog_uri(&uri) {
+            self.state.trigger_rebuild();
+        }
     }
 }
+
+// ── Catalog rebuild ───────────────────────────────────────────────────────────
+
+/// Returns true if `uri` points to a `.po` or `.pot` catalog file.
+fn is_catalog_uri(uri: &Uri) -> bool {
+    matches!(
+        uri.to_file_path()
+            .as_deref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str()),
+        Some("po" | "pot")
+    )
+}
+
+/// Rebuild the catalog index from all known catalog files.
+///
+/// For each file that is currently open in the editor (REQ-CAT-07), the buffer
+/// text is parsed instead of the on-disk file. If buffer parsing fails, the
+/// on-disk version is used as a fallback (P3).
+async fn rebuild_catalog_index(state: &Arc<WorkspaceState>) {
+    let catalog_files = state.catalog_files.read().await.clone();
+    let mut all_entries = vec![];
+
+    for disk_path in &catalog_files {
+        let Some((locale, domain)) = locale_domain_from_po_path(disk_path) else {
+            continue;
+        };
+
+        // Check for an open buffer that overlays this file (REQ-CAT-07).
+        let buffer_text = state.documents.iter().find_map(|entry| {
+            let doc_path = entry.key().to_file_path()?;
+            (doc_path.as_ref() == disk_path.as_path()).then(|| entry.value().rope.to_string())
+        });
+
+        let path_owned = disk_path.clone();
+        let entries = if let Some(text) = buffer_text {
+            let path_buf = path_owned.clone();
+            let locale_c = locale.clone();
+            let domain_c = domain.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                load_po_from_str(&text, &path_buf, &locale_c, &domain_c)
+            })
+            .await;
+            match result {
+                Ok(Ok(e)) => e,
+                _ => {
+                    // Buffer failed to parse — fall back to disk (P3).
+                    tokio::task::spawn_blocking(move || load_po_file(&path_owned, &locale, &domain))
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .unwrap_or_default()
+                }
+            }
+        } else {
+            tokio::task::spawn_blocking(move || load_po_file(&path_owned, &locale, &domain))
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .unwrap_or_default()
+        };
+
+        all_entries.extend(entries);
+    }
+
+    let entry_count = all_entries.len();
+    *state.catalog_index.write().await = CatalogIndex::build(all_entries);
+    tracing::info!(entries = entry_count, "catalog index rebuilt");
+}
+
+// ── Workspace scan ────────────────────────────────────────────────────────────
 
 fn scan_workspace(
     root: &Path,
@@ -236,8 +345,9 @@ fn apply_change(rope: &mut Rope, change: TextDocumentContentChangeEvent, enc: Po
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::index::CatalogKey;
     use tempfile::TempDir;
-    use tower_lsp_server::ls_types::Range;
+    use tower_lsp_server::ls_types::{Range, Uri};
 
     fn pos(line: u32, character: u32) -> Position {
         Position { line, character }
@@ -391,5 +501,123 @@ mod tests {
             std::path::Path::new("/nonexistent/file.py"),
             &["_(".to_string()]
         ));
+    }
+
+    // ── REQ-CAT-07 / REQ-CAT-08 ──────────────────────────────────────────────
+
+    const DISK_PO: &str = concat!(
+        "msgid \"\"\n",
+        "msgstr \"\"\n",
+        "\"Content-Type: text/plain; charset=UTF-8\\n\"\n",
+        "\n",
+        "msgid \"Disk Msg\"\n",
+        "msgstr \"Datenträger\"\n",
+    );
+
+    const BUFFER_PO: &str = concat!(
+        "msgid \"\"\n",
+        "msgstr \"\"\n",
+        "\"Content-Type: text/plain; charset=UTF-8\\n\"\n",
+        "\n",
+        "msgid \"Buffer Msg\"\n",
+        "msgstr \"Puffer\"\n",
+    );
+
+    fn make_uri(path: &std::path::Path) -> Uri {
+        Uri::from_file_path(path).unwrap()
+    }
+
+    fn write_po(dir: &TempDir, rel: &str, content: &[u8]) -> PathBuf {
+        let p = dir.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, content).unwrap();
+        p
+    }
+
+    #[tokio::test]
+    async fn rebuild_uses_disk_when_no_buffer_open() {
+        let dir = TempDir::new().unwrap();
+        let po = write_po(&dir, "de/LC_MESSAGES/messages.po", DISK_PO.as_bytes());
+
+        let state = Arc::new(WorkspaceState::new());
+        *state.catalog_files.write().await = vec![po];
+
+        rebuild_catalog_index(&state).await;
+
+        let index = state.catalog_index.read().await;
+        assert!(!index.lookup(&CatalogKey::new("Disk Msg")).is_empty());
+        assert!(index.lookup(&CatalogKey::new("Buffer Msg")).is_empty());
+    }
+
+    #[tokio::test]
+    async fn rebuild_overlays_open_buffer_content() {
+        // REQ-CAT-07: buffer beats disk when the file is open.
+        let dir = TempDir::new().unwrap();
+        let po = write_po(&dir, "de/LC_MESSAGES/messages.po", DISK_PO.as_bytes());
+
+        let state = Arc::new(WorkspaceState::new());
+        *state.catalog_files.write().await = vec![po.clone()];
+
+        state.documents.insert(
+            make_uri(&po),
+            DocumentState {
+                rope: Rope::from_str(BUFFER_PO),
+                version: 1,
+            },
+        );
+
+        rebuild_catalog_index(&state).await;
+
+        let index = state.catalog_index.read().await;
+        assert!(!index.lookup(&CatalogKey::new("Buffer Msg")).is_empty());
+        assert!(index.lookup(&CatalogKey::new("Disk Msg")).is_empty());
+    }
+
+    #[tokio::test]
+    async fn rebuild_reverts_to_disk_after_buffer_removed() {
+        // Simulates didClose: once the buffer is gone, the next rebuild reads disk.
+        let dir = TempDir::new().unwrap();
+        let po = write_po(&dir, "de/LC_MESSAGES/messages.po", DISK_PO.as_bytes());
+
+        let state = Arc::new(WorkspaceState::new());
+        *state.catalog_files.write().await = vec![po.clone()];
+
+        state.documents.insert(
+            make_uri(&po),
+            DocumentState {
+                rope: Rope::from_str(BUFFER_PO),
+                version: 1,
+            },
+        );
+        rebuild_catalog_index(&state).await;
+        assert!(!state
+            .catalog_index
+            .read()
+            .await
+            .lookup(&CatalogKey::new("Buffer Msg"))
+            .is_empty());
+
+        state.documents.remove(&make_uri(&po));
+        rebuild_catalog_index(&state).await;
+        let index = state.catalog_index.read().await;
+        assert!(!index.lookup(&CatalogKey::new("Disk Msg")).is_empty());
+        assert!(index.lookup(&CatalogKey::new("Buffer Msg")).is_empty());
+    }
+
+    #[test]
+    fn trigger_rebuild_before_channel_set_is_noop() {
+        // Must not panic when the channel hasn't been wired up yet.
+        let state = WorkspaceState::new();
+        state.trigger_rebuild(); // should be silent no-op
+    }
+
+    #[test]
+    fn is_catalog_uri_detects_po_and_pot() {
+        let po = Uri::from_file_path("/locale/de/LC_MESSAGES/messages.po").unwrap();
+        let pot = Uri::from_file_path("/locale/messages.pot").unwrap();
+        let py = Uri::from_file_path("/views.py").unwrap();
+        assert!(is_catalog_uri(&po));
+        assert!(is_catalog_uri(&pot));
+        assert!(!is_catalog_uri(&py));
     }
 }

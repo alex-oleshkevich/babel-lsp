@@ -157,7 +157,7 @@ fn unescape_po(s: &str) -> String {
     result
 }
 
-// ── load_po_file ──────────────────────────────────────────────────────────────
+// ── load_po_file / load_po_from_str ──────────────────────────────────────────
 
 /// Parse a `.po` or `.pot` file into catalog entries.
 ///
@@ -165,14 +165,45 @@ fn unescape_po(s: &str) -> String {
 #[allow(dead_code)]
 pub fn load_po_file(path: &Path, locale: &str, domain: &str) -> Result<Vec<CatalogEntry>, String> {
     let content = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let catalog = po_file::parse(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let line_map = PoLineMap::build(&content);
+    parse_po_content(path, &line_map, path, locale, domain)
+}
 
+/// Parse `.po` content from an in-memory string into catalog entries.
+///
+/// `original_path` is stored in the resulting entries' `file_path` field;
+/// it does not need to exist on disk.
+#[allow(dead_code)]
+pub fn load_po_from_str(
+    content: &str,
+    original_path: &Path,
+    locale: &str,
+    domain: &str,
+) -> Result<Vec<CatalogEntry>, String> {
+    use std::io::Write as _;
+    let mut tmp = tempfile::NamedTempFile::new().map_err(|e| format!("tempfile: {e}"))?;
+    tmp.write_all(content.as_bytes())
+        .map_err(|e| format!("tempfile write: {e}"))?;
+    tmp.flush().map_err(|e| format!("tempfile flush: {e}"))?;
+    let line_map = PoLineMap::build(content);
+    parse_po_content(tmp.path(), &line_map, original_path, locale, domain)
+}
+
+/// Internal: run polib on `po_path`, assign `file_path = original_path` in results.
+fn parse_po_content(
+    po_path: &Path,
+    line_map: &PoLineMap,
+    original_path: &Path,
+    locale: &str,
+    domain: &str,
+) -> Result<Vec<CatalogEntry>, String> {
+    let catalog =
+        po_file::parse(po_path).map_err(|e| format!("{}: {e}", original_path.display()))?;
     let mut entries = vec![];
     for msg in catalog.messages() {
         let msgid = msg.msgid().to_string();
         if msgid.is_empty() {
-            continue; // skip header
+            continue;
         }
         let msgctxt = msg.msgctxt().map(str::to_string);
         let key = CatalogKey {
@@ -180,7 +211,6 @@ pub fn load_po_file(path: &Path, locale: &str, domain: &str) -> Result<Vec<Catal
             msgctxt: msgctxt.clone(),
         };
         let line = line_map.get_line(&key).unwrap_or(0);
-
         let msgid_plural = if msg.is_plural() {
             msg.msgid_plural().ok().map(str::to_string)
         } else {
@@ -194,7 +224,6 @@ pub fn load_po_file(path: &Path, locale: &str, domain: &str) -> Result<Vec<Catal
                 Err(_) => vec![],
             }
         };
-
         entries.push(CatalogEntry {
             locale: locale.to_string(),
             domain: domain.to_string(),
@@ -206,7 +235,7 @@ pub fn load_po_file(path: &Path, locale: &str, domain: &str) -> Result<Vec<Catal
                 fuzzy: msg.is_fuzzy(),
                 obsolete: false,
             },
-            file_path: path.to_path_buf(),
+            file_path: original_path.to_path_buf(),
             line,
         });
     }
@@ -446,5 +475,76 @@ mod tests {
     fn load_po_unreadable_returns_err() {
         let result = load_po_file(Path::new("/nonexistent/messages.po"), "de", "messages");
         assert!(result.is_err());
+    }
+
+    // --- load_po_from_str ---
+
+    #[test]
+    fn load_po_from_str_parses_buffer_content() {
+        let content = concat!(
+            "msgid \"\"\n",
+            "msgstr \"\"\n",
+            "\"Content-Type: text/plain; charset=UTF-8\\n\"\n",
+            "\n",
+            "msgid \"Buffer Entry\"\n",
+            "msgstr \"Puffer Eintrag\"\n",
+        );
+        let path = Path::new("/locale/de/LC_MESSAGES/messages.po");
+        let entries = load_po_from_str(content, path, "de", "messages").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].msgid, "Buffer Entry");
+        assert_eq!(entries[0].locale, "de");
+        assert_eq!(entries[0].domain, "messages");
+        assert_eq!(entries[0].file_path, path);
+    }
+
+    #[test]
+    fn load_po_from_str_has_line_number() {
+        let content = concat!(
+            "msgid \"\"\n",
+            "msgstr \"\"\n",
+            "\"Content-Type: text/plain; charset=UTF-8\\n\"\n",
+            "\n",
+            "msgid \"Alpha\"\n",
+            "msgstr \"\"\n",
+        );
+        let path = Path::new("/locale/de/LC_MESSAGES/messages.po");
+        let entries = load_po_from_str(content, path, "de", "messages").unwrap();
+        assert_eq!(entries[0].msgid, "Alpha");
+        assert_eq!(entries[0].line, 5);
+    }
+
+    #[test]
+    fn load_po_from_str_file_path_is_original_not_tempfile() {
+        let content = concat!(
+            "msgid \"\"\nmsgstr \"\"\n",
+            "\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n",
+            "msgid \"Msg\"\nmsgstr \"\"\n",
+        );
+        let original = Path::new("/some/virtual/path.po");
+        let entries = load_po_from_str(content, original, "fr", "admin").unwrap();
+        assert_eq!(entries[0].file_path, original);
+    }
+
+    #[test]
+    fn load_po_from_str_disk_differs_from_buffer() {
+        let dir = TempDir::new().unwrap();
+        let path = write_po(&dir, "de/LC_MESSAGES/messages.po", MINIMAL_PO);
+
+        let disk_entries = load_po_file(&path, "de", "messages").unwrap();
+
+        let buffer_content = concat!(
+            "msgid \"\"\nmsgstr \"\"\n",
+            "\"Content-Type: text/plain; charset=UTF-8\\n\"\n\n",
+            "msgid \"Only In Buffer\"\nmsgstr \"\"\n",
+        );
+        let buf_entries = load_po_from_str(buffer_content, &path, "de", "messages").unwrap();
+
+        let disk_ids: Vec<_> = disk_entries.iter().map(|e| e.msgid.as_str()).collect();
+        let buf_ids: Vec<_> = buf_entries.iter().map(|e| e.msgid.as_str()).collect();
+        assert!(disk_ids.contains(&"Checkout"));
+        assert!(!disk_ids.contains(&"Only In Buffer"));
+        assert!(buf_ids.contains(&"Only In Buffer"));
+        assert!(!buf_ids.contains(&"Checkout"));
     }
 }
