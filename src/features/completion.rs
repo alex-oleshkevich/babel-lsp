@@ -65,12 +65,16 @@ pub fn complete(
 
     candidates
         .iter()
-        .map(|(key, _)| build_item(key, index, prefix_range))
+        .enumerate()
+        .map(|(idx, (key, _))| build_item(key, index, prefix_range, idx))
         .collect()
 }
 
-fn build_item(key: &CatalogKey, index: &CatalogIndex, prefix_range: Range) -> CompletionItem {
-    let entries = index.lookup(key);
+fn build_item(key: &CatalogKey, index: &CatalogIndex, prefix_range: Range, sort_index: usize) -> CompletionItem {
+    let mut entries: Vec<_> = index.lookup(key).iter().collect();
+
+    // Sort deterministically by locale then domain before any use.
+    entries.sort_by(|a, b| a.locale.cmp(&b.locale).then(a.domain.cmp(&b.domain)));
 
     // REQ-CPL-05: detail = first locale's translation status.
     let detail = entries.first().map(|e| {
@@ -110,6 +114,12 @@ fn build_item(key: &CatalogKey, index: &CatalogIndex, prefix_range: Range) -> Co
         kind: Some(CompletionItemKind::TEXT),
         detail,
         documentation,
+        // REQ-CPL-03: filter_text lets the client match contains-only items against the
+        // typed prefix (the label may not start with the typed text).
+        filter_text: Some(key.msgid.clone()),
+        // Preserve server-side ordering; 4-digit zero-padded index keeps lexicographic sort
+        // consistent with the ranked candidate list.
+        sort_text: Some(format!("{:04}", sort_index)),
         text_edit: Some(CompletionTextEdit::Edit(TextEdit {
             range: prefix_range,
             new_text: key.msgid.clone(),
