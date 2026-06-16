@@ -63,11 +63,24 @@ pub fn complete(
         end: pos,
     };
 
-    candidates
-        .iter()
-        .enumerate()
-        .map(|(idx, (key, _))| build_item(key, index, prefix_range, idx))
-        .collect()
+    // Cap short/empty-prefix results to avoid O(N) documentation table builds for
+    // large catalogs. When the prefix is very short we skip per-item documentation
+    // and limit to 100 items so the list stays responsive.
+    let short_prefix = prefix_lower.len() < 2;
+    let iter: Box<dyn Iterator<Item = _>> = if short_prefix {
+        Box::new(candidates.iter().enumerate().take(100))
+    } else {
+        Box::new(candidates.iter().enumerate())
+    };
+
+    iter.map(|(idx, (key, _))| {
+        if short_prefix {
+            build_item_no_docs(key, index, prefix_range, idx)
+        } else {
+            build_item(key, index, prefix_range, idx)
+        }
+    })
+    .collect()
 }
 
 fn build_item(key: &CatalogKey, index: &CatalogIndex, prefix_range: Range, sort_index: usize) -> CompletionItem {
@@ -129,6 +142,36 @@ fn build_item(key: &CatalogKey, index: &CatalogIndex, prefix_range: Range, sort_
 }
 
 
+/// Like `build_item` but skips building the documentation table. Used when the
+/// typed prefix is very short (< 2 chars) to avoid expensive O(N) work.
+fn build_item_no_docs(key: &CatalogKey, index: &CatalogIndex, prefix_range: Range, sort_index: usize) -> CompletionItem {
+    let mut entries: Vec<_> = index.lookup(key).iter().collect();
+    entries.sort_by(|a, b| a.locale.cmp(&b.locale).then(a.domain.cmp(&b.domain)));
+
+    let detail = entries.first().map(|e| {
+        let msgstr = e.msgstr.iter().find(|s| !s.is_empty());
+        if let Some(s) = msgstr {
+            format!("[{}] {}", e.locale, s)
+        } else {
+            format!("[{}] (untranslated)", e.locale)
+        }
+    });
+
+    CompletionItem {
+        label: key.msgid.clone(),
+        kind: Some(CompletionItemKind::TEXT),
+        detail,
+        documentation: None,
+        filter_text: Some(key.msgid.clone()),
+        sort_text: Some(format!("{:04}", sort_index)),
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+            range: prefix_range,
+            new_text: key.msgid.clone(),
+        })),
+        ..Default::default()
+    }
+}
+
 /// Given the start position of a string node (pointing at the opening quote /
 /// string prefix), scan forward to find where the string content begins, then
 /// return the text typed between that content start and `cursor` together with
@@ -173,8 +216,16 @@ fn string_prefix(
         return None;
     };
 
-    // Everything after the opening quote(s) is the typed prefix.
-    let content = after_prefix[quote_byte_len..].to_string();
+    // Everything after the opening quote(s) up to the first closing quote is the
+    // typed prefix. If the cursor is positioned after the closing quote we must
+    // stop there to avoid including the close quote (or text beyond it) in the
+    // prefix, which would corrupt match results.
+    let raw_content = &after_prefix[quote_byte_len..];
+    let content = raw_content
+        .split(|c| c == '"' || c == '\'')
+        .next()
+        .unwrap_or(raw_content)
+        .to_string();
 
     // Calculate the LSP position right after the opening quote(s).
     let content_byte_start = skip + quote_byte_len;
@@ -409,5 +460,51 @@ mod tests {
         assert!(pos_in_range(Position { line: 0, character: 7 }, range));
         assert!(!pos_in_range(Position { line: 0, character: 10 }, range)); // exclusive end
         assert!(!pos_in_range(Position { line: 0, character: 2 }, range));
+    }
+
+    // ── babel-lsp-6ke: closing quote must not be included in prefix ───────────
+
+    #[test]
+    fn string_prefix_cursor_after_close_quote_strips_close_quote() {
+        // Cursor is positioned one past the closing quote (col 11 in `"Checkout"`).
+        // The prefix must be "Checkout" without the closing `"`.
+        let rope = Rope::from_str(r#""Checkout""#);
+        let start = Position { line: 0, character: 0 };
+        let cursor = Position { line: 0, character: 10 }; // past the closing `"`
+        let (prefix, _) = string_prefix(&rope, start, cursor, PositionEncoding::Utf16).unwrap();
+        assert_eq!(prefix, "Checkout");
+    }
+
+    // ── babel-lsp-1hs: empty-prefix results are capped at 100, no docs table ──
+
+    #[test]
+    fn empty_prefix_capped_at_100_and_no_documentation() {
+        // Build an index with 150 distinct msgids.
+        let entries: Vec<_> = (0..150u32)
+            .map(|i| entry("de", &format!("Key{:03}", i), "Übersetzung"))
+            .collect();
+        let index = CatalogIndex::build(entries);
+
+        // Cursor right after opening quote → empty prefix.
+        let items = complete_at(r#"_("")"#, 0, 3, &index);
+
+        assert!(items.len() <= 100, "expected at most 100 items, got {}", items.len());
+        for item in &items {
+            assert!(
+                item.documentation.is_none(),
+                "no documentation expected for empty-prefix items, but '{}' has one",
+                item.label
+            );
+        }
+    }
+
+    #[test]
+    fn non_empty_prefix_two_chars_includes_documentation() {
+        // With a prefix of 2+ chars, full docs should be built.
+        let index = shopfront_index(); // Checkout: de + fr
+        let items = complete_at(r#"_("Ch")"#, 0, 5, &index);
+        let checkout = items.iter().find(|i| i.label == "Checkout").unwrap();
+        // Two locales → documentation table present.
+        assert!(checkout.documentation.is_some());
     }
 }

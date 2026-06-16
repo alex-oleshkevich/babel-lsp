@@ -37,7 +37,13 @@ pub fn hover_catalog(
     index: &CatalogIndex,
 ) -> Option<Hover> {
     let cursor_line = pos.line + 1; // 1-based
-    let hit = file_entries.iter().find(|e| e.line == cursor_line)?;
+    // Match any line within the entry's msgid span so that hovering on line 2+
+    // of a multi-line msgid still returns the hover card.
+    let hit = file_entries.iter().find(|e| {
+        let entry_start = e.line;
+        let entry_end = entry_start + e.msgid.lines().count().saturating_sub(1) as u32;
+        cursor_line >= entry_start && cursor_line <= entry_end
+    })?;
     let key = hit.key();
     let entries = index.lookup(&key);
     render_card(&key, hit.msgid_plural.as_deref(), None, entries)
@@ -287,5 +293,42 @@ mod tests {
         let calls = python::extract(br#"_(f"Hello {user}")"#, &no_extra());
         let h = hover_source(&calls, Position { line: 0, character: 5 }, &index);
         assert!(h.is_none());
+    }
+
+    // ── babel-lsp-0rc: multi-line msgid hover hit-test ────────────────────────
+
+    #[test]
+    fn hover_catalog_multiline_msgid_matches_continuation_lines() {
+        let index = CatalogIndex::build(vec![entry("de", "Checkout", "Kasse")]);
+        // Simulate an entry whose msgid spans lines 5-7 (1-based).
+        let multiline_entry = CatalogEntry {
+            locale: "de".into(),
+            domain: "messages".into(),
+            msgid: "Line one\nLine two\nLine three".into(),
+            msgctxt: None,
+            msgid_plural: None,
+            msgstr: vec!["Zeile eins\nZeile zwei\nZeile drei".into()],
+            flags: EntryFlags { fuzzy: false, obsolete: false },
+            file_path: std::path::PathBuf::from("/locale/messages.po"),
+            line: 5, // 1-based, msgid starts at line 5
+        };
+        let full_index = CatalogIndex::build(vec![multiline_entry.clone()]);
+        let file_entries = vec![&multiline_entry];
+
+        // Hovering on the first line (0-based line 4 = 1-based line 5) must hit.
+        let h = hover_catalog(&file_entries, Position { line: 4, character: 0 }, &full_index);
+        assert!(h.is_some(), "hover on first msgid line should hit");
+
+        // Hovering on the second line (0-based line 5 = 1-based line 6) must also hit.
+        let h = hover_catalog(&file_entries, Position { line: 5, character: 0 }, &full_index);
+        assert!(h.is_some(), "hover on second msgid line should hit");
+
+        // Hovering on the third line (0-based line 6 = 1-based line 7) must also hit.
+        let h = hover_catalog(&file_entries, Position { line: 6, character: 0 }, &full_index);
+        assert!(h.is_some(), "hover on third msgid line should hit");
+
+        // Hovering past the entry (0-based line 7 = 1-based line 8) must miss.
+        let h = hover_catalog(&file_entries, Position { line: 7, character: 0 }, &full_index);
+        assert!(h.is_none(), "hover past entry should miss");
     }
 }
