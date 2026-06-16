@@ -7,5 +7,6 @@ pub mod document_link;
 pub mod document_symbol;
 pub mod hover;
 pub mod inlay_hint;
+pub mod pybabel;
 pub mod references;
 pub mod rename;

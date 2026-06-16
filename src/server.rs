@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
 use crate::config::{Config, discover_locale_dirs, resolve_config};
-use crate::features::{code_action, completion, definition, diagnostics, document_link, document_symbol, hover, inlay_hint, references, rename};
+use crate::features::{code_action, completion, definition, diagnostics, document_link, document_symbol, hover, inlay_hint, pybabel, references, rename};
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -113,6 +113,10 @@ impl LanguageServer for Backend {
                     InlayHintOptions::default(),
                 ))),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: pybabel::COMMANDS.iter().map(|s| s.to_string()).collect(),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                }),
                 rename_provider: Some(OneOf::Right(RenameOptions {
                     prepare_provider: Some(true),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -598,6 +602,71 @@ impl LanguageServer for Backend {
                 data: None,
             }),
         }
+    }
+
+    async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<LSPAny>> {
+        let op = match params.command.as_str() {
+            "babel-lsp.extract" => pybabel::PybabelOp::Extract,
+            "babel-lsp.update" => pybabel::PybabelOp::Update,
+            "babel-lsp.compile" => pybabel::PybabelOp::Compile,
+            other => {
+                return Err(tower_lsp_server::jsonrpc::Error {
+                    code: tower_lsp_server::jsonrpc::ErrorCode::MethodNotFound,
+                    message: format!("unknown command: {other}").into(),
+                    data: None,
+                });
+            }
+        };
+
+        let locale = params
+            .arguments
+            .first()
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+
+        let Some(root) = self.state.workspace_root.get().cloned() else {
+            return Ok(None);
+        };
+
+        let config = self.state.config.read().await.clone();
+        let locale_dirs = discover_locale_dirs(&root, &config);
+
+        let opts = pybabel::RunOptions {
+            pybabel_path: config.pybabel_path,
+            locale_dirs,
+            domains: config.domains,
+            locale,
+            workspace_root: root,
+        };
+
+        let client = self.client.clone();
+        let state = Arc::clone(&self.state);
+
+        let result = tokio::task::spawn_blocking(move || pybabel::run_pybabel(op, &opts))
+            .await
+            .unwrap_or(pybabel::RunResult::Failure {
+                exit_code: -1,
+                stderr: "task failed".into(),
+            });
+
+        match result {
+            pybabel::RunResult::Success => {
+                state.trigger_rebuild();
+            }
+            pybabel::RunResult::Failure { stderr, .. } => {
+                client.show_message(MessageType::ERROR, stderr).await;
+            }
+            pybabel::RunResult::NotFound => {
+                client
+                    .show_message(
+                        MessageType::ERROR,
+                        "pybabel not found — install Babel or set `pybabel_path` in config",
+                    )
+                    .await;
+            }
+        }
+
+        Ok(None)
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
