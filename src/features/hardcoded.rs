@@ -431,6 +431,9 @@ pub fn code_actions_for_hardcoded(
         if start >= end || end > line.len() {
             continue;
         }
+        if !line.is_char_boundary(start) || !line.is_char_boundary(end) {
+            continue;
+        }
 
         let raw_literal = &line[start..end];
         let Some(content) = extract_string_content(raw_literal) else { continue };
