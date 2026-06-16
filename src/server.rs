@@ -13,7 +13,7 @@ use walkdir::WalkDir;
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
 use crate::config::{Config, discover_locale_dirs, resolve_config};
-use crate::features::completion;
+use crate::features::{completion, hover};
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -90,6 +90,7 @@ impl LanguageServer for Backend {
                 )),
                 // REQ-CPL-02: quote characters trigger msgid completion.
                 completion_provider: Some(completion_provider_options()),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -190,6 +191,32 @@ impl LanguageServer for Backend {
         let items = extract_and_complete(&rope, &text, &uri, pos, enc, &index, &config);
 
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+        let index = self.state.catalog_index.read().await;
+
+        // Catalog file (.po/.pot): resolve by line number from loaded entries.
+        if is_catalog_uri(&uri) {
+            if let Some(path) = uri.to_file_path() {
+                let file_entries = index.entries_for_file(&path);
+                return Ok(hover::hover_catalog(&file_entries, pos, &index));
+            }
+            return Ok(None);
+        }
+
+        // Source file: extract calls, find the one under the cursor.
+        let Some(doc) = self.state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let rope = doc.rope.clone();
+        drop(doc);
+        let text = rope.to_string();
+        let config = self.state.config.read().await;
+        let calls = extract_calls(&text, &uri, &config);
+        Ok(hover::hover_source(&calls, pos, &index))
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
@@ -350,21 +377,15 @@ async fn rebuild_catalog_index(state: &Arc<WorkspaceState>) {
     tracing::info!(entries = entry_count, "catalog index rebuilt");
 }
 
-// ── Completion dispatch ───────────────────────────────────────────────────────
+// ── Source file dispatch helpers ──────────────────────────────────────────────
 
-/// Extract translation calls for `uri` and run completion.
-///
-/// Picks the Python or Jinja extractor based on the file extension; returns
-/// an empty list for any other file type.
-fn extract_and_complete(
-    rope: &ropey::Rope,
+/// Extract translation calls from a source file, picking the right extractor
+/// based on the file extension. Returns an empty vec for unknown file types.
+fn extract_calls(
     text: &str,
     uri: &Uri,
-    pos: Position,
-    enc: PositionEncoding,
-    index: &CatalogIndex,
     config: &Config,
-) -> Vec<CompletionItem> {
+) -> Vec<crate::extract::types::TranslationCall> {
     let ext = uri
         .to_file_path()
         .and_then(|p| p.extension().and_then(|e| e.to_str()).map(str::to_owned))
@@ -379,7 +400,7 @@ fn extract_and_complete(
         })
         .collect::<std::collections::HashMap<_, _>>();
 
-    let calls = if ext == "py" {
+    if ext == "py" {
         crate::extract::python::extract(text.as_bytes(), &extra)
     } else if config
         .jinja_extensions
@@ -388,9 +409,23 @@ fn extract_and_complete(
     {
         crate::extract::jinja::extract(text.as_bytes(), &extra)
     } else {
-        return vec![];
-    };
+        vec![]
+    }
+}
 
+fn extract_and_complete(
+    rope: &ropey::Rope,
+    text: &str,
+    uri: &Uri,
+    pos: Position,
+    enc: PositionEncoding,
+    index: &CatalogIndex,
+    config: &Config,
+) -> Vec<CompletionItem> {
+    let calls = extract_calls(text, uri, config);
+    if calls.is_empty() {
+        return vec![];
+    }
     completion::complete(rope, &calls, pos, enc, index)
 }
 
