@@ -252,10 +252,16 @@ fn check_string_candidate(node: Node, source: &[u8], out: &mut Vec<Diagnostic>) 
 // ── Heuristics (REQ-HARD-04, REQ-HARD-05) ────────────────────────────────────
 
 /// True if the content looks like prose meant for a person:
-/// - contains at least one space, **or**
+/// - contains at least one space or newline, **or**
 /// - is a single capitalized word (first character is uppercase).
+///
+/// Single words without spaces (including PascalCase identifiers) are never
+/// flagged — they are likely class names or enum values, not user-facing prose.
 fn is_prose(content: &str) -> bool {
     if content.is_empty() {
+        return false;
+    }
+    if !content.contains(' ') && !content.contains('\n') {
         return false;
     }
     if content.contains(' ') {
@@ -316,8 +322,6 @@ fn is_log_call(func_node: Node, source: &[u8]) -> bool {
         .unwrap_or_default();
     let obj_base = obj.split('.').next_back().unwrap_or(obj);
     LOG_OBJECT_NAMES.iter().any(|&n| obj_base.eq_ignore_ascii_case(n))
-        || obj.to_ascii_lowercase().contains("logger")
-        || obj.to_ascii_lowercase().contains("log")
 }
 
 fn is_ui_call(callee: &str) -> bool {
@@ -600,9 +604,16 @@ mod tests {
     }
 
     #[test]
-    fn req_hard_04_single_capitalized_word_fires() {
+    fn req_hard_04_single_capitalized_word_no_space_silent() {
+        // Single capitalized words without spaces are identifiers/class names — not prose.
         let diags = detect("def v():\n    return \"Checkout\"");
-        assert!(has(&diags), "capitalized single word is prose");
+        assert!(!has(&diags), "single capitalized word without space is not prose");
+    }
+
+    #[test]
+    fn req_hard_04_capitalized_multi_word_fires() {
+        let diags = detect("def v():\n    return \"Checkout now\"");
+        assert!(has(&diags), "capitalized multi-word string is prose");
     }
 
     #[test]
