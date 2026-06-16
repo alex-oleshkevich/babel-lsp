@@ -107,6 +107,19 @@ pub fn msgstr_replace_range(span: &PoEntrySpan, lines: &[&str]) -> Range {
     }
 }
 
+/// Range covering the entire msgid keyword block (first line through last continuation).
+///
+/// The range ends at column 0 of the first line after the msgid block (either
+/// `msgid_plural` or `msgstr`). Replacing it with `msgid "new"\n` correctly
+/// handles both single- and multi-line msgids without disturbing neighbouring lines.
+pub fn msgid_block_range(span: &PoEntrySpan) -> Range {
+    let end_line = span.msgid_plural_line.unwrap_or(span.msgstr_start_line);
+    Range {
+        start: Position { line: span.msgid_line, character: 0 },
+        end: Position { line: end_line, character: 0 },
+    }
+}
+
 /// LSP range for the `#,` flags line (content only, no trailing newline).
 pub fn flags_line_range(span: &PoEntrySpan, lines: &[&str]) -> Option<Range> {
     let fl = span.flags_line?;

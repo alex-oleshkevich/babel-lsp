@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
 use crate::config::{Config, discover_locale_dirs, resolve_config};
-use crate::features::{code_action, completion, definition, diagnostics, document_link, document_symbol, hover, inlay_hint, references};
+use crate::features::{code_action, completion, definition, diagnostics, document_link, document_symbol, hover, inlay_hint, references, rename};
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -113,6 +113,10 @@ impl LanguageServer for Backend {
                     InlayHintOptions::default(),
                 ))),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                })),
                 ..ServerCapabilities::default()
             },
         })
@@ -455,6 +459,145 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         Ok(Some(actions.into_iter().map(CodeActionOrCommand::CodeAction).collect()))
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        let uri = &params.text_document.uri;
+        let pos = params.position;
+
+        if is_catalog_uri(uri) {
+            let Some(path) = uri.to_file_path() else { return Ok(None) };
+            let Some(doc) = self.state.documents.get(uri) else { return Ok(None) };
+            let content = doc.rope.to_string();
+            drop(doc);
+            let lines: Vec<&str> = content.lines().collect();
+            let index = self.state.catalog_index.read().await;
+            let entries = index.entries_for_file(&path);
+            let result = rename::prepare_rename_catalog(&entries, &lines, pos);
+            drop(index);
+            Ok(result.map(|(range, _)| PrepareRenameResponse::Range(range)))
+        } else {
+            let Some(doc) = self.state.documents.get(uri) else { return Ok(None) };
+            let content = doc.rope.to_string();
+            drop(doc);
+            let config = self.state.config.read().await;
+            let calls = extract_calls(&content, uri, &config);
+            drop(config);
+            let result = rename::prepare_rename_source(&calls, pos);
+            Ok(result.map(|(range, _)| PrepareRenameResponse::Range(range)))
+        }
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let pos = params.text_document_position.position;
+        let new_name = &params.new_name;
+
+        // Resolve the CatalogKey from the cursor position.
+        let key = if is_catalog_uri(uri) {
+            let Some(path) = uri.to_file_path() else { return Ok(None) };
+            let Some(doc) = self.state.documents.get(uri) else { return Ok(None) };
+            let content = doc.rope.to_string();
+            drop(doc);
+            let lines: Vec<&str> = content.lines().collect();
+            let index = self.state.catalog_index.read().await;
+            let entries = index.entries_for_file(&path);
+            let key = rename::prepare_rename_catalog(&entries, &lines, pos).map(|(_, k)| k);
+            drop(index);
+            key
+        } else {
+            let Some(doc) = self.state.documents.get(uri) else { return Ok(None) };
+            let content = doc.rope.to_string();
+            drop(doc);
+            let config = self.state.config.read().await;
+            let calls = extract_calls(&content, uri, &config);
+            drop(config);
+            rename::prepare_rename_source(&calls, pos).map(|(_, k)| k)
+        };
+
+        let Some(key) = key else { return Ok(None) };
+
+        let index = self.state.catalog_index.read().await;
+
+        // Collect buffer content for every catalog file that touches the key.
+        let catalog_entries: Vec<_> = {
+            let mut v: Vec<_> = index.lookup(&key).into_iter().cloned().collect();
+            if let Some(pot) = index.lookup_pot(&key) {
+                v.push(pot.clone());
+            }
+            v
+        };
+
+        let mut catalog_bufs: std::collections::HashMap<std::path::PathBuf, String> =
+            std::collections::HashMap::new();
+        for entry in &catalog_entries {
+            if catalog_bufs.contains_key(&entry.file_path) {
+                continue;
+            }
+            let content = Uri::from_file_path(&entry.file_path)
+                .as_ref()
+                .and_then(|cu| self.state.documents.get(cu))
+                .map(|d| d.rope.to_string());
+            let content = if let Some(c) = content {
+                c
+            } else {
+                let path = entry.file_path.clone();
+                tokio::task::spawn_blocking(move || std::fs::read_to_string(path))
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .unwrap_or_default()
+            };
+            catalog_bufs.insert(entry.file_path.clone(), content);
+        }
+
+        // Collect source call sites (open buffers + workspace scan).
+        let config = self.state.config.read().await;
+        let mut call_sites: Vec<(Uri, Vec<crate::extract::types::TranslationCall>)> = Vec::new();
+        for entry in self.state.documents.iter() {
+            let doc_uri = entry.key().clone();
+            if is_catalog_uri(&doc_uri) { continue; }
+            let text = entry.value().rope.to_string();
+            let calls = extract_calls(&text, &doc_uri, &config);
+            if !calls.is_empty() {
+                call_sites.push((doc_uri, calls));
+            }
+        }
+        if let Some(root) = self.state.workspace_root.get() {
+            let open_uris: std::collections::HashSet<String> =
+                call_sites.iter().map(|(u, _)| u.to_string()).collect();
+            let jinja_exts = config.jinja_extensions.clone();
+            let root = root.clone();
+            let extra = config
+                .extra_keywords
+                .iter()
+                .filter_map(|kw| {
+                    crate::extract::types::TranslationFunc::from_name(kw)
+                        .map(|f| (kw.clone(), f))
+                })
+                .collect::<std::collections::HashMap<_, _>>();
+            drop(config);
+            let scanned = tokio::task::spawn_blocking(move || {
+                scan_workspace_for_calls(&root, &jinja_exts, &extra, &open_uris)
+            })
+            .await
+            .unwrap_or_default();
+            call_sites.extend(scanned);
+        } else {
+            drop(config);
+        }
+
+        match rename::build_rename_edit(&key, new_name, &index, &catalog_bufs, &call_sites) {
+            Ok(edit) => Ok(Some(edit)),
+            Err(msg) => Err(tower_lsp_server::jsonrpc::Error {
+                code: tower_lsp_server::jsonrpc::ErrorCode::InvalidParams,
+                message: msg.into(),
+                data: None,
+            }),
+        }
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
