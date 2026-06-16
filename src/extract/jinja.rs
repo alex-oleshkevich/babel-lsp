@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tower_lsp_server::ls_types::{Position, Range};
 use tree_sitter::{Node, Parser};
 
-use super::types::{TranslationCall, TranslationFunc};
+use super::types::{TranslationCall, TranslationFunc, UnresolvedReason};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -67,15 +67,29 @@ fn extract_from_print<'tree>(
     source: &[u8],
     extra: &HashMap<String, TranslationFunc>,
 ) -> Option<TranslationCall> {
+    if let Some(call_node) = find_call_in_subtree(node) {
+        match call_node.kind() {
+            "function_call" => extract_func_call(call_node, source, extra),
+            "method_call" => extract_method_call(call_node, source, extra),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// Depth-first search for the first `function_call` or `method_call` node
+/// in the subtree rooted at `node`. Descends through filter nodes and other
+/// wrappers so that `{{ _('x')|upper }}` (print > filter > function_call) is found.
+fn find_call_in_subtree(node: Node) -> Option<Node> {
+    let kind = node.kind();
+    if kind == "function_call" || kind == "method_call" {
+        return Some(node);
+    }
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        let result = match child.kind() {
-            "function_call" => extract_func_call(child, source, extra),
-            "method_call" => extract_method_call(child, source, extra),
-            _ => None,
-        };
-        if result.is_some() {
-            return result;
+        if let Some(found) = find_call_in_subtree(child) {
+            return Some(found);
         }
     }
     None
@@ -105,37 +119,62 @@ fn extract_method_call(
     Some(build_call(node, func, slots))
 }
 
-type Slot = Option<(String, Range)>;
+/// Unresolved slot carries the arg node's range so diagnostics can point at it.
+enum SlotValue {
+    Resolved(String, Range),
+    Unresolved(Range),
+}
 
-fn collect_jinja_slots(node: Node, source: &[u8]) -> Vec<Slot> {
+fn collect_jinja_slots(node: Node, source: &[u8]) -> Vec<Option<SlotValue>> {
     let mut cursor = node.walk();
     node.children_by_field_name("positional_argument", &mut cursor)
         .map(|arg| {
             if arg.kind() == "string" {
-                strip_jinja_string(arg, source).map(|s| (s, node_range(arg)))
+                strip_jinja_string(arg, source)
+                    .map(|s| SlotValue::Resolved(s, node_range(arg)))
             } else {
-                None // non-string positional → unresolved slot
+                Some(SlotValue::Unresolved(node_range(arg)))
             }
         })
         .collect()
 }
 
-fn build_call(node: Node, func: TranslationFunc, slots: Vec<Slot>) -> TranslationCall {
+fn build_call(node: Node, func: TranslationFunc, slots: Vec<Option<SlotValue>>) -> TranslationCall {
     let mut it = slots.into_iter();
     let domain = func
         .has_domain()
-        .then(|| it.next().flatten().map(|(s, _)| s))
+        .then(|| {
+            it.next().flatten().and_then(|sv| match sv {
+                SlotValue::Resolved(s, _) => Some(s),
+                SlotValue::Unresolved(_) => None,
+            })
+        })
         .flatten();
     let msgctxt = func
         .has_context()
-        .then(|| it.next().flatten().map(|(s, _)| s))
+        .then(|| {
+            it.next().flatten().and_then(|sv| match sv {
+                SlotValue::Resolved(s, _) => Some(s),
+                SlotValue::Unresolved(_) => None,
+            })
+        })
         .flatten();
-    let msgid_slot = it.next().flatten();
-    let msgid = msgid_slot.as_ref().map(|(s, _)| s.clone());
-    let msgid_range = msgid_slot.map(|(_, r)| r);
+    let (msgid, msgid_range, unresolved_reason, unresolved_arg_range) =
+        match it.next().flatten() {
+            Some(SlotValue::Resolved(s, r)) => (Some(s), Some(r), None, None),
+            Some(SlotValue::Unresolved(r)) => {
+                (None, None, Some(UnresolvedReason::NonConstant), Some(r))
+            }
+            None => (None, None, None, None),
+        };
     let msgid_plural = func
         .has_plural()
-        .then(|| it.next().flatten().map(|(s, _)| s))
+        .then(|| {
+            it.next().flatten().and_then(|sv| match sv {
+                SlotValue::Resolved(s, _) => Some(s),
+                SlotValue::Unresolved(_) => None,
+            })
+        })
         .flatten();
     TranslationCall {
         func,
@@ -145,8 +184,8 @@ fn build_call(node: Node, func: TranslationFunc, slots: Vec<Slot>) -> Translatio
         domain,
         range: node_range(node),
         msgid_range,
-        unresolved_reason: None,
-        unresolved_arg_range: None,
+        unresolved_reason,
+        unresolved_arg_range,
         is_implicit_concat: false,
     }
 }
@@ -402,7 +441,7 @@ mod tests {
         assert_eq!(calls[0].msgid_plural.as_deref(), Some("Many"));
     }
 
-    // REQ-EXT-12 — non-literal arg yields msgid: None
+    // REQ-EXT-12 — non-literal arg yields msgid: None and sets unresolved_reason
 
     #[test]
     fn req_ext_12_variable_arg_is_none() {
@@ -410,6 +449,30 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert!(calls[0].msgid.is_none());
         assert!(calls[0].msgid_range.is_none());
+    }
+
+    #[test]
+    fn req_ext_12_variable_arg_sets_unresolved_reason() {
+        use super::super::types::UnresolvedReason;
+        let calls = ex("{{ _(label) }}");
+        assert_eq!(calls[0].unresolved_reason, Some(UnresolvedReason::NonConstant));
+        assert!(calls[0].unresolved_arg_range.is_some());
+    }
+
+    // babel-lsp-ff2 — filtered calls are extracted ({{ _('x')|upper }})
+
+    #[test]
+    fn filtered_call_is_extracted() {
+        let calls = ex(r#"{{ _("Hello")|upper }}"#);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].msgid.as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn double_filtered_call_is_extracted() {
+        let calls = ex(r#"{{ _("Hello")|upper|trim }}"#);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].msgid.as_deref(), Some("Hello"));
     }
 
     // REQ-EXT-13 — walk past ERROR nodes
