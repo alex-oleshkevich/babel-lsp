@@ -166,7 +166,8 @@ fn unescape_po(s: &str) -> String {
 pub fn load_po_file(path: &Path, locale: &str, domain: &str) -> Result<Vec<CatalogEntry>, String> {
     let content = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let line_map = PoLineMap::build(&content);
-    parse_po_content(path, &line_map, path, locale, domain)
+    let catalog = parse_po_str(&content, path)?;
+    parse_catalog(catalog, &line_map, path, locale, domain)
 }
 
 /// Parse `.po` content from an in-memory string into catalog entries.
@@ -181,23 +182,26 @@ pub fn load_po_from_str(
     domain: &str,
 ) -> Result<Vec<CatalogEntry>, String> {
     let line_map = PoLineMap::build(content);
-    let cursor = std::io::Cursor::new(content.as_bytes());
-    let catalog = po_file::parse_from_reader(cursor)
-        .map_err(|e| format!("{}: {e}", original_path.display()))?;
+    let catalog = parse_po_str(content, original_path)?;
     parse_catalog(catalog, &line_map, original_path, locale, domain)
 }
 
-/// Internal: run polib on `po_path`, assign `file_path = original_path` in results.
-fn parse_po_content(
-    po_path: &Path,
-    line_map: &PoLineMap,
-    original_path: &Path,
-    locale: &str,
-    domain: &str,
-) -> Result<Vec<CatalogEntry>, String> {
-    let catalog =
-        po_file::parse(po_path).map_err(|e| format!("{}: {e}", original_path.display()))?;
-    parse_catalog(catalog, line_map, original_path, locale, domain)
+/// Parse PO content from a string, tolerating a missing or ill-formed header by
+/// synthesizing a minimal one and retrying.
+fn parse_po_str(content: &str, original_path: &Path) -> Result<polib::catalog::Catalog, String> {
+    let cursor = std::io::Cursor::new(content.as_bytes());
+    match po_file::parse_from_reader(cursor) {
+        Ok(catalog) => Ok(catalog),
+        Err(e) if e.to_string().contains("Metadata does not exist or is ill-formed") => {
+            let patched = format!(
+                "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n{content}"
+            );
+            let cursor = std::io::Cursor::new(patched.as_bytes());
+            po_file::parse_from_reader(cursor)
+                .map_err(|e2| format!("{}: {e2}", original_path.display()))
+        }
+        Err(e) => Err(format!("{}: {e}", original_path.display())),
+    }
 }
 
 /// Internal: convert a parsed polib `Catalog` into `CatalogEntry` values.
@@ -549,6 +553,39 @@ mod tests {
         let original = Path::new("/some/virtual/path.po");
         let entries = load_po_from_str(content, original, "fr", "admin").unwrap();
         assert_eq!(entries[0].file_path, original);
+    }
+
+    #[test]
+    fn load_po_headerless_file_yields_entries() {
+        let content = concat!(
+            "msgid \"First\"\n",
+            "msgstr \"Erstes\"\n",
+            "\n",
+            "msgid \"Second\"\n",
+            "msgstr \"\"\n",
+        );
+        let dir = TempDir::new().unwrap();
+        let path = write_po(&dir, "de/LC_MESSAGES/messages.po", content);
+        let entries = load_po_file(&path, "de", "messages").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|e| e.msgid == "First"));
+        assert!(entries.iter().any(|e| e.msgid == "Second"));
+    }
+
+    #[test]
+    fn load_po_from_str_headerless_yields_entries() {
+        let content = concat!(
+            "msgid \"Alpha\"\n",
+            "msgstr \"Alfa\"\n",
+            "\n",
+            "msgid \"Beta\"\n",
+            "msgstr \"\"\n",
+        );
+        let path = Path::new("/locale/de/LC_MESSAGES/messages.po");
+        let entries = load_po_from_str(content, path, "de", "messages").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|e| e.msgid == "Alpha"));
+        assert!(entries.iter().any(|e| e.msgid == "Beta"));
     }
 
     #[test]
