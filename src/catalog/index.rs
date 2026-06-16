@@ -164,6 +164,14 @@ impl CatalogIndex {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty() && self.pot_entries.is_empty()
     }
+
+    /// Returns `true` if at least one `.pot` template entry was loaded.
+    ///
+    /// Used by `po/obsolete`: without a `.pot` in the workspace, "absent from
+    /// template" is unprovable, so the check stays silent (REQ-DIAG-09).
+    pub fn has_pot_entries(&self) -> bool {
+        !self.pot_entries.is_empty()
+    }
 }
 
 impl Default for CatalogIndex {
