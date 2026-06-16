@@ -118,8 +118,7 @@ fn collect_slots(args_node: Node, source: &[u8]) -> Vec<Slot> {
                 }
             },
             "concatenated_string" => {
-                let s = extract_concatenated(child, source);
-                slots.push(Some(SlotValue::Concat(s, node_range(child))));
+                slots.push(Some(extract_concatenated(child, source)));
             }
             "call" => {
                 let reason = if is_format_method_call(child, source) {
@@ -217,13 +216,23 @@ fn extract_string(node: Node, source: &[u8]) -> Option<String> {
     strip_python_string(text)
 }
 
-fn extract_concatenated(node: Node, source: &[u8]) -> String {
+fn extract_concatenated(node: Node, source: &[u8]) -> SlotValue {
+    let range = node_range(node);
     let mut cursor = node.walk();
-    node.named_children(&mut cursor)
-        .filter(|n| n.kind() == "string")
-        .filter_map(|n| extract_string(n, source))
-        .collect::<Vec<_>>()
-        .join("")
+    let parts: Vec<_> = node.named_children(&mut cursor).collect();
+    let mut joined = String::new();
+    for part in &parts {
+        if part.kind() != "string" {
+            return SlotValue::Unresolved(UnresolvedReason::NonConstant, range);
+        }
+        match extract_string(*part, source) {
+            Some(s) => joined.push_str(&s),
+            None => {
+                return SlotValue::Unresolved(fstring_reason(*part, source), range);
+            }
+        }
+    }
+    SlotValue::Concat(joined, range)
 }
 
 /// Strip the outer prefix and quotes from a Python string literal source text.
@@ -641,5 +650,37 @@ c = ngettext("%(n)d item", "%(n)d items", n)
     fn single_string_does_not_set_concat_flag() {
         let calls = ex(r#"_("Hello")"#);
         assert!(!calls[0].is_implicit_concat);
+    }
+
+    // ── concatenated_string with f-string parts ───────────────────────────────
+
+    #[test]
+    fn concat_with_fstring_part_yields_unresolved_fstring() {
+        // _('a' f'{x}') — the f-string part makes extraction impossible.
+        let calls = ex(r#"_('a' f'{x}')"#);
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].msgid.is_none());
+        assert_eq!(calls[0].unresolved_reason, Some(UnresolvedReason::FString));
+        assert!(calls[0].unresolved_arg_range.is_some());
+        assert!(!calls[0].is_implicit_concat);
+    }
+
+    #[test]
+    fn concat_fstring_leading_part_yields_unresolved_fstring() {
+        // _(f'{x}' 'b') — f-string is the first part.
+        let calls = ex(r#"_(f'{x}' 'b')"#);
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].msgid.is_none());
+        assert_eq!(calls[0].unresolved_reason, Some(UnresolvedReason::FString));
+    }
+
+    #[test]
+    fn concat_all_plain_strings_resolves_normally() {
+        // _('a' 'b') — no f-string, should still concatenate cleanly.
+        let calls = ex(r#"_('a' 'b')"#);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].msgid.as_deref(), Some("ab"));
+        assert!(calls[0].is_implicit_concat);
+        assert!(calls[0].unresolved_reason.is_none());
     }
 }
