@@ -1,9 +1,14 @@
 use std::collections::HashMap;
 
-use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Uri};
+use tower_lsp_server::ls_types::{
+    CodeAction, CodeActionKind, Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range,
+    TextEdit, Uri, WorkspaceEdit,
+};
 use tree_sitter::{Node, Parser};
 
+use crate::catalog::index::{CatalogIndex, CatalogKey};
 use crate::extract::types::TranslationFunc;
+use crate::util::po_edit::escape_po;
 
 const MIN_CHAR_LEN: usize = 3;
 
@@ -390,6 +395,122 @@ fn make_diag(range: Range, content: &str) -> Diagnostic {
     }
 }
 
+// ── Extract message quick fix ─────────────────────────────────────────────────
+
+/// Generate "Extract message" code actions for `msg/hardcoded-string` diagnostics.
+///
+/// `pot` is `None` when no `.pot` template exists (wrap-only variant per REQ-HARD-10).
+/// `locale_po_files` enables the "add to all locales" variant (REQ-HARD-07).
+pub fn code_actions_for_hardcoded(
+    diagnostics: &[Diagnostic],
+    source: &str,
+    source_uri: &Uri,
+    keyword: &str,
+    pot: Option<(&Uri, &str)>,
+    index: &CatalogIndex,
+    locale_po_files: &[(&Uri, &str)],
+) -> Vec<CodeAction> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut actions = Vec::new();
+
+    for diag in diagnostics {
+        if !matches!(&diag.code, Some(NumberOrString::String(s)) if s == "msg/hardcoded-string") {
+            continue;
+        }
+
+        let range = diag.range;
+        if range.start.line != range.end.line {
+            continue;
+        }
+
+        let Some(line) = lines.get(range.start.line as usize) else { continue };
+
+        // Column positions are byte offsets (tree-sitter node_range uses byte columns).
+        let start = range.start.character as usize;
+        let end = range.end.character as usize;
+        if start >= end || end > line.len() {
+            continue;
+        }
+
+        let raw_literal = &line[start..end];
+        let Some(content) = extract_string_content(raw_literal) else { continue };
+
+        // Wrap the raw literal to preserve Python escape sequences exactly.
+        let source_edit = TextEdit {
+            range,
+            new_text: format!("{}({})", keyword, raw_literal),
+        };
+
+        match pot {
+            None => {
+                // No .pot template — wrap only (REQ-HARD-10).
+                let mut changes = HashMap::new();
+                changes.insert(source_uri.clone(), vec![source_edit]);
+                actions.push(quickfix(format!("Wrap in {keyword}()"), changes));
+            }
+            Some((pot_uri, pot_content)) => {
+                if index.is_in_pot(&CatalogKey::new(&content)) {
+                    // Already in catalog — wrap only, no duplicate .pot entry (REQ-HARD-08).
+                    let mut changes = HashMap::new();
+                    changes.insert(source_uri.clone(), vec![source_edit]);
+                    actions.push(quickfix(
+                        format!("Wrap in {keyword}() (message already in catalog)"),
+                        changes,
+                    ));
+                } else {
+                    // New msgid — wrap source and append to .pot (REQ-HARD-06).
+                    let pot_edit = pot_append_edit(pot_content, &content);
+
+                    let mut changes = HashMap::new();
+                    changes.insert(source_uri.clone(), vec![source_edit.clone()]);
+                    changes.insert(pot_uri.clone(), vec![pot_edit.clone()]);
+                    actions.push(quickfix("Extract message", changes));
+
+                    // "Add to all locales" variant (REQ-HARD-07).
+                    if !locale_po_files.is_empty() {
+                        let mut changes = HashMap::new();
+                        changes.insert(source_uri.clone(), vec![source_edit.clone()]);
+                        changes.insert(pot_uri.clone(), vec![pot_edit]);
+                        for &(po_uri, po_content) in locale_po_files {
+                            changes.insert(po_uri.clone(), vec![pot_append_edit(po_content, &content)]);
+                        }
+                        actions.push(quickfix("Extract message and add to all locales", changes));
+                    }
+                }
+            }
+        }
+    }
+
+    actions
+}
+
+fn quickfix(title: impl Into<String>, changes: HashMap<Uri, Vec<TextEdit>>) -> CodeAction {
+    CodeAction {
+        title: title.into(),
+        kind: Some(CodeActionKind::QUICKFIX),
+        edit: Some(WorkspaceEdit { changes: Some(changes), ..WorkspaceEdit::default() }),
+        ..CodeAction::default()
+    }
+}
+
+/// Insert `\nmsgid "<escaped>"\nmsgstr ""\n` at the end of a PO/POT file.
+fn pot_append_edit(content: &str, msgid: &str) -> TextEdit {
+    let line_count = content.lines().count() as u32;
+    let (insert_line, insert_char) = if content.is_empty() || content.ends_with('\n') {
+        (line_count, 0)
+    } else {
+        let last_line_len = content.lines().last().map(str::len).unwrap_or(0) as u32;
+        (line_count.saturating_sub(1), last_line_len)
+    };
+    TextEdit {
+        range: Range {
+            start: Position { line: insert_line, character: insert_char },
+            end: Position { line: insert_line, character: insert_char },
+        },
+        new_text: format!("\nmsgid \"{}\"\nmsgstr \"\"\n", escape_po(msgid)),
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -601,5 +722,251 @@ mod tests {
         let src = "def v():\n    return \"Order placed\"\ndef w():\n    return \"Save changes\"";
         let diags = detect(src);
         assert_eq!(diags.len(), 2, "should find two hardcoded strings");
+    }
+
+    // ── Extract message quick fix ─────────────────────────────────────────────
+
+    use std::path::PathBuf;
+    use crate::catalog::index::{CatalogEntry, CatalogIndex, EntryFlags};
+
+    fn source_uri() -> Uri {
+        Uri::from_file_path("/app/views.py").unwrap()
+    }
+
+    fn pot_uri() -> Uri {
+        Uri::from_file_path("/locale/messages.pot").unwrap()
+    }
+
+    fn de_uri() -> Uri {
+        Uri::from_file_path("/locale/de/LC_MESSAGES/messages.po").unwrap()
+    }
+
+    fn make_diag_at(line: u32, start_char: u32, end_char: u32) -> Diagnostic {
+        Diagnostic {
+            range: Range {
+                start: Position { line, character: start_char },
+                end: Position { line, character: end_char },
+            },
+            code: Some(NumberOrString::String("msg/hardcoded-string".to_string())),
+            ..Diagnostic::default()
+        }
+    }
+
+    fn empty_index() -> CatalogIndex {
+        CatalogIndex::build(vec![])
+    }
+
+    fn index_with_pot_entry(msgid: &str) -> CatalogIndex {
+        let entry = CatalogEntry {
+            locale: String::new(),
+            domain: "messages".to_string(),
+            msgid: msgid.to_string(),
+            msgctxt: None,
+            msgid_plural: None,
+            msgstr: vec![String::new()],
+            flags: EntryFlags { fuzzy: false, obsolete: false },
+            file_path: PathBuf::from("/locale/messages.pot"),
+            line: 1,
+        };
+        CatalogIndex::build(vec![entry])
+    }
+
+    fn first_source_edit(action: &CodeAction) -> Option<&TextEdit> {
+        action.edit.as_ref()?.changes.as_ref()?.get(&source_uri())?.first()
+    }
+
+    fn first_pot_edit(action: &CodeAction) -> Option<&TextEdit> {
+        action.edit.as_ref()?.changes.as_ref()?.get(&pot_uri())?.first()
+    }
+
+    // ── REQ-HARD-06: extract wraps source and appends .pot ────────────────────
+
+    #[test]
+    fn req_hard_06_extract_wraps_literal_in_source() {
+        // `return "Order placed"` — the literal is at columns 11-25 on line 1.
+        let source = "def place_order():\n    return \"Order placed\"\n";
+        let diag = make_diag_at(1, 11, 25);
+        let index = empty_index();
+        let pot_content = "msgid \"\"\nmsgstr \"\"\n";
+        let actions = code_actions_for_hardcoded(
+            &[diag], source, &source_uri(), "_",
+            Some((&pot_uri(), pot_content)), &index, &[],
+        );
+        let action = actions.iter().find(|a| a.title == "Extract message").unwrap();
+        let edit = first_source_edit(action).unwrap();
+        assert_eq!(edit.new_text, "_(\"Order placed\")");
+    }
+
+    #[test]
+    fn req_hard_06_extract_appends_pot_entry() {
+        let source = "def place_order():\n    return \"Order placed\"\n";
+        let diag = make_diag_at(1, 11, 25);
+        let index = empty_index();
+        let pot_content = "msgid \"\"\nmsgstr \"\"\n";
+        let actions = code_actions_for_hardcoded(
+            &[diag], source, &source_uri(), "_",
+            Some((&pot_uri(), pot_content)), &index, &[],
+        );
+        let action = actions.iter().find(|a| a.title == "Extract message").unwrap();
+        let pot_edit = first_pot_edit(action).unwrap();
+        assert!(pot_edit.new_text.contains("msgid \"Order placed\""), "got: {}", pot_edit.new_text);
+        assert!(pot_edit.new_text.contains("msgstr \"\""), "got: {}", pot_edit.new_text);
+    }
+
+    #[test]
+    fn req_hard_06_extract_is_atomic_workspace_edit() {
+        let source = "def place_order():\n    return \"Order placed\"\n";
+        let diag = make_diag_at(1, 11, 25);
+        let index = empty_index();
+        let actions = code_actions_for_hardcoded(
+            &[diag], source, &source_uri(), "_",
+            Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")), &index, &[],
+        );
+        let action = actions.iter().find(|a| a.title == "Extract message").unwrap();
+        let changes = action.edit.as_ref().unwrap().changes.as_ref().unwrap();
+        assert!(changes.contains_key(&source_uri()), "must have source edit");
+        assert!(changes.contains_key(&pot_uri()), "must have .pot edit");
+    }
+
+    // ── REQ-HARD-07: seed all locales variant ─────────────────────────────────
+
+    #[test]
+    fn req_hard_07_locale_seeding_variant_offered_when_po_files_present() {
+        let source = "def v():\n    return \"Order placed\"\n";
+        let diag = make_diag_at(1, 11, 25);
+        let index = empty_index();
+        let de_content = "msgid \"\"\nmsgstr \"\"\n";
+        let actions = code_actions_for_hardcoded(
+            &[diag], source, &source_uri(), "_",
+            Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")),
+            &index, &[(&de_uri(), de_content)],
+        );
+        assert!(actions.iter().any(|a| a.title == "Extract message and add to all locales"),
+            "locale seeding action should be offered when po files are present");
+    }
+
+    #[test]
+    fn req_hard_07_locale_seeding_appends_to_po_file() {
+        let source = "def v():\n    return \"Order placed\"\n";
+        let diag = make_diag_at(1, 11, 25);
+        let index = empty_index();
+        let de_content = "msgid \"\"\nmsgstr \"\"\n";
+        let actions = code_actions_for_hardcoded(
+            &[diag], source, &source_uri(), "_",
+            Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")),
+            &index, &[(&de_uri(), de_content)],
+        );
+        let action = actions.iter().find(|a| a.title == "Extract message and add to all locales").unwrap();
+        let changes = action.edit.as_ref().unwrap().changes.as_ref().unwrap();
+        let po_edits = changes.get(&de_uri()).unwrap();
+        assert!(po_edits[0].new_text.contains("msgid \"Order placed\""),
+            "locale .po should get the new entry");
+    }
+
+    #[test]
+    fn req_hard_07_locale_seeding_not_offered_without_po_files() {
+        let source = "def v():\n    return \"Order placed\"\n";
+        let diag = make_diag_at(1, 11, 25);
+        let index = empty_index();
+        let actions = code_actions_for_hardcoded(
+            &[diag], source, &source_uri(), "_",
+            Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")),
+            &index, &[],
+        );
+        assert!(!actions.iter().any(|a| a.title.contains("all locales")),
+            "locale seeding action should not appear when no .po files");
+    }
+
+    // ── REQ-HARD-08: reuse existing msgid ─────────────────────────────────────
+
+    #[test]
+    fn req_hard_08_already_in_catalog_offers_wrap_only() {
+        let source = "def v():\n    return \"Checkout\"\n";
+        // "Checkout" is 10 chars: columns 11-21
+        let diag = make_diag_at(1, 11, 21);
+        let index = index_with_pot_entry("Checkout");
+        let actions = code_actions_for_hardcoded(
+            &[diag], source, &source_uri(), "_",
+            Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")), &index, &[],
+        );
+        assert!(actions.iter().any(|a| a.title.contains("already in catalog")),
+            "should say 'already in catalog'");
+        assert!(!actions.iter().any(|a| a.title == "Extract message"),
+            "should not offer full extract when already in catalog");
+    }
+
+    #[test]
+    fn req_hard_08_already_in_catalog_no_pot_edit() {
+        let source = "def v():\n    return \"Checkout\"\n";
+        let diag = make_diag_at(1, 11, 21);
+        let index = index_with_pot_entry("Checkout");
+        let actions = code_actions_for_hardcoded(
+            &[diag], source, &source_uri(), "_",
+            Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")), &index, &[],
+        );
+        let action = actions.iter().find(|a| a.title.contains("already in catalog")).unwrap();
+        let changes = action.edit.as_ref().unwrap().changes.as_ref().unwrap();
+        assert!(!changes.contains_key(&pot_uri()), "no .pot edit for existing msgid");
+        assert!(changes.contains_key(&source_uri()), "source edit still present");
+    }
+
+    // ── REQ-HARD-10: correctness gate — no .pot → wrap only ──────────────────
+
+    #[test]
+    fn req_hard_10_no_pot_file_offers_wrap_only() {
+        let source = "def v():\n    return \"Order placed\"\n";
+        let diag = make_diag_at(1, 11, 25);
+        let index = empty_index();
+        let actions = code_actions_for_hardcoded(
+            &[diag], source, &source_uri(), "_",
+            None, &index, &[],
+        );
+        assert_eq!(actions.len(), 1);
+        assert!(actions[0].title.starts_with("Wrap in"), "should offer wrap-only action");
+        let changes = actions[0].edit.as_ref().unwrap().changes.as_ref().unwrap();
+        assert_eq!(changes.len(), 1, "only source edit, no .pot edit");
+    }
+
+    #[test]
+    fn req_hard_10_diagnostic_ignored_for_non_hardcoded_code() {
+        let source = "def v():\n    return \"Order placed\"\n";
+        let mut diag = make_diag_at(1, 11, 25);
+        diag.code = Some(NumberOrString::String("po/missing-translation".to_string()));
+        let index = empty_index();
+        let actions = code_actions_for_hardcoded(
+            &[diag], source, &source_uri(), "_",
+            Some((&pot_uri(), "")), &index, &[],
+        );
+        assert!(actions.is_empty(), "non-hardcoded diagnostic should be ignored");
+    }
+
+    // ── pot_append_edit helpers ───────────────────────────────────────────────
+
+    #[test]
+    fn pot_append_edit_inserts_at_end_when_trailing_newline() {
+        let content = "msgid \"\"\nmsgstr \"\"\n";
+        let edit = pot_append_edit(content, "Hello world");
+        assert!(edit.new_text.starts_with('\n'), "should start with blank separator");
+        assert!(edit.new_text.contains("msgid \"Hello world\""));
+        assert!(edit.new_text.contains("msgstr \"\""));
+        // Insertion point is past the last line (line_count=2, char=0)
+        assert_eq!(edit.range.start.line, 2);
+        assert_eq!(edit.range.start.character, 0);
+    }
+
+    #[test]
+    fn pot_append_edit_inserts_at_end_when_no_trailing_newline() {
+        let content = "msgid \"\"\nmsgstr \"\"";
+        let edit = pot_append_edit(content, "Hello world");
+        // No trailing newline: last line is "msgstr \"\"" (9 chars)
+        assert_eq!(edit.range.start.line, 1);
+        assert_eq!(edit.range.start.character, 9);
+    }
+
+    #[test]
+    fn pot_append_edit_escapes_special_chars() {
+        let edit = pot_append_edit("", "Say \"hello\"");
+        assert!(edit.new_text.contains("msgid \"Say \\\"hello\\\"\""),
+            "got: {}", edit.new_text);
     }
 }

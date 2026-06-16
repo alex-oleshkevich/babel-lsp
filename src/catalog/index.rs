@@ -170,6 +170,23 @@ impl CatalogIndex {
         self.entries.is_empty() && self.pot_entries.is_empty()
     }
 
+    /// Returns the file path of the first `.pot` template loaded.
+    pub fn pot_file_path(&self) -> Option<&Path> {
+        self.pot_entries.values().next().map(|e| e.file_path.as_path())
+    }
+
+    /// Returns all unique `.po` locale file paths (sorted, deduplicated).
+    pub fn po_file_paths(&self) -> Vec<&Path> {
+        let mut paths: Vec<&Path> = self.entries
+            .values()
+            .flatten()
+            .map(|e| e.file_path.as_path())
+            .collect();
+        paths.sort_unstable();
+        paths.dedup();
+        paths
+    }
+
     /// Returns `true` if at least one `.pot` template entry was loaded.
     ///
     /// Used by `po/obsolete`: without a `.pot` in the workspace, "absent from
@@ -326,5 +343,38 @@ mod tests {
         let idx = CatalogIndex::build(vec![e1, e2]);
         let de_path = Path::new("/locale/de/LC_MESSAGES/messages.po");
         assert_eq!(idx.entries_for_file(de_path).len(), 1);
+    }
+
+    #[test]
+    fn pot_file_path_returns_pot_entry_path() {
+        let mut pot = make_entry("", "Checkout", "");
+        pot.file_path = PathBuf::from("/locale/messages.pot");
+        let idx = CatalogIndex::build(vec![pot]);
+        assert_eq!(idx.pot_file_path(), Some(Path::new("/locale/messages.pot")));
+    }
+
+    #[test]
+    fn pot_file_path_none_when_no_pot() {
+        let idx = CatalogIndex::build(vec![make_entry("de", "Checkout", "Kasse")]);
+        assert!(idx.pot_file_path().is_none());
+    }
+
+    #[test]
+    fn po_file_paths_returns_unique_paths() {
+        let mut e1 = make_entry("de", "Checkout", "Kasse");
+        e1.file_path = PathBuf::from("/locale/de/LC_MESSAGES/messages.po");
+        let mut e2 = make_entry("de", "Save", "Speichern");
+        e2.file_path = PathBuf::from("/locale/de/LC_MESSAGES/messages.po");
+        let mut e3 = make_entry("fr", "Checkout", "Caisse");
+        e3.file_path = PathBuf::from("/locale/fr/LC_MESSAGES/messages.po");
+        let idx = CatalogIndex::build(vec![e1, e2, e3]);
+        let paths = idx.po_file_paths();
+        assert_eq!(paths.len(), 2, "should be deduplicated");
+    }
+
+    #[test]
+    fn po_file_paths_empty_when_no_po_entries() {
+        let idx = CatalogIndex::build(vec![]);
+        assert!(idx.po_file_paths().is_empty());
     }
 }
