@@ -13,7 +13,7 @@ use walkdir::WalkDir;
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
 use crate::config::{Config, discover_locale_dirs, resolve_config};
-use crate::features::{completion, definition, document_link, hover, references};
+use crate::features::{completion, definition, diagnostics, document_link, hover, references};
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -111,6 +111,7 @@ impl LanguageServer for Backend {
         let (rebuild_tx, mut rebuild_rx) = watch::channel(());
         self.state.set_rebuild_trigger(rebuild_tx);
 
+        let client_for_rebuild = self.client.clone();
         let state_for_rebuild = Arc::clone(&self.state);
         tokio::task::spawn(async move {
             loop {
@@ -123,6 +124,7 @@ impl LanguageServer for Backend {
                     .is_ok()
                 {}
                 rebuild_catalog_index(&state_for_rebuild).await;
+                publish_diagnostics_after_rebuild(&state_for_rebuild, &client_for_rebuild).await;
             }
         });
 
@@ -392,8 +394,21 @@ impl LanguageServer for Backend {
             };
             self.state.documents.insert(uri.clone(), doc);
         }
-        // REQ-ARCH-10: every opened file receives a publish (e2e "server saw this" signal)
-        self.client.publish_diagnostics(uri, vec![], None).await;
+        // REQ-ARCH-10: every opened file receives an immediate publish.
+        let config = self.state.config.read().await;
+        let index = self.state.catalog_index.read().await;
+        let diags = if is_catalog_uri(&uri) {
+            let path = uri.to_file_path().unwrap_or_default();
+            let file_entries = index.entries_for_file(&path);
+            diagnostics::check_catalog(&file_entries, &uri, &index)
+        } else {
+            let calls = extract_calls(&params.text_document.text, &uri, &config);
+            diagnostics::check_source(&calls, &index)
+        };
+        let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
+        drop(index);
+        drop(config);
+        self.client.publish_diagnostics(uri, filtered, None).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -416,6 +431,17 @@ impl LanguageServer for Backend {
 
         if is_catalog_uri(&uri) {
             self.state.trigger_rebuild();
+        } else if let Some(doc) = self.state.documents.get(&uri) {
+            let text = doc.rope.to_string();
+            drop(doc);
+            let config = self.state.config.read().await;
+            let index = self.state.catalog_index.read().await;
+            let calls = extract_calls(&text, &uri, &config);
+            let diags = diagnostics::check_source(&calls, &index);
+            let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
+            drop(index);
+            drop(config);
+            self.client.publish_diagnostics(uri, filtered, None).await;
         }
     }
 
@@ -517,6 +543,43 @@ async fn rebuild_catalog_index(state: &Arc<WorkspaceState>) {
     let entry_count = all_entries.len();
     *state.catalog_index.write().await = CatalogIndex::build(all_entries);
     tracing::info!(entries = entry_count, "catalog index rebuilt");
+}
+
+/// Publish diagnostics for all catalog files and open source files.
+///
+/// Called immediately after [`rebuild_catalog_index`] so every diagnostic
+/// consumer sees a consistent view of the new index.
+async fn publish_diagnostics_after_rebuild(state: &Arc<WorkspaceState>, client: &Client) {
+    let config = state.config.read().await.clone();
+    let catalog_files = state.catalog_files.read().await.clone();
+    let open_sources: Vec<(Uri, String)> = state
+        .documents
+        .iter()
+        .filter_map(|entry| {
+            let uri = entry.key().clone();
+            if is_catalog_uri(&uri) { return None; }
+            Some((uri, entry.value().rope.to_string()))
+        })
+        .collect();
+
+    let index = state.catalog_index.read().await;
+
+    // Catalog-side diagnostics: one publish per .po/.pot file.
+    for disk_path in &catalog_files {
+        let Some(uri) = Uri::from_file_path(disk_path) else { continue };
+        let file_entries = index.entries_for_file(disk_path);
+        let diags = diagnostics::check_catalog(&file_entries, &uri, &index);
+        let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
+        client.publish_diagnostics(uri, filtered, None).await;
+    }
+
+    // Source-side diagnostics: re-check all open source files.
+    for (uri, text) in open_sources {
+        let calls = extract_calls(&text, &uri, &config);
+        let diags = diagnostics::check_source(&calls, &index);
+        let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
+        client.publish_diagnostics(uri, filtered, None).await;
+    }
 }
 
 // ── Source file dispatch helpers ──────────────────────────────────────────────

@@ -12,8 +12,6 @@ use crate::extract::types::{TranslationCall, UnresolvedReason};
 ///
 /// The returned `Diagnostic` slice has no URI — the caller binds them to the
 /// document URI when publishing via `textDocument/publishDiagnostics`.
-// Server wiring (publishDiagnostics) is task babel-lsp-1p7.4; suppress until then.
-#[allow(dead_code)]
 pub fn check_source(calls: &[TranslationCall], index: &CatalogIndex) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     for call in calls {
@@ -122,8 +120,49 @@ fn make_diag(
     }
 }
 
-// Server wiring (publishDiagnostics) is task babel-lsp-1p7.4; suppress until then.
-#[allow(dead_code)]
+/// Apply per-rule select/ignore/severity config to a diagnostic list.
+///
+/// Rules (from E15 REQ-CFG-05):
+/// - `select = ["all"]` passes every code; otherwise only listed codes survive.
+/// - `ignore` drops any code listed there, after select.
+/// - `severity` map overrides the severity for matching codes.
+pub fn apply_diag_filter(
+    diags: Vec<Diagnostic>,
+    cfg: &crate::config::DiagnosticsConfig,
+) -> Vec<Diagnostic> {
+    let has_all = cfg.select.iter().any(|s| s == "all");
+    diags
+        .into_iter()
+        .filter_map(|mut d| {
+            let code = match &d.code {
+                Some(NumberOrString::String(s)) => s.clone(),
+                _ => return Some(d),
+            };
+            let selected = has_all || cfg.select.contains(&code);
+            if !selected {
+                return None;
+            }
+            if cfg.ignore.contains(&code) {
+                return None;
+            }
+            if let Some(sev_str) = cfg.severity.get(&code) {
+                d.severity = parse_severity(sev_str);
+            }
+            Some(d)
+        })
+        .collect()
+}
+
+fn parse_severity(s: &str) -> Option<DiagnosticSeverity> {
+    match s.to_ascii_lowercase().as_str() {
+        "error" => Some(DiagnosticSeverity::ERROR),
+        "warning" | "warn" => Some(DiagnosticSeverity::WARNING),
+        "information" | "info" => Some(DiagnosticSeverity::INFORMATION),
+        "hint" => Some(DiagnosticSeverity::HINT),
+        _ => None,
+    }
+}
+
 pub fn check_catalog(
     entries: &[&CatalogEntry],
     file_uri: &Uri,
@@ -1584,5 +1623,89 @@ mod tests {
         for d in &diags {
             assert_eq!(d.source.as_deref(), Some("babel-lsp"));
         }
+    }
+
+    // ── apply_diag_filter ─────────────────────────────────────────────────────
+
+    use crate::config::DiagnosticsConfig;
+
+    fn fuzzy_diag() -> Diagnostic {
+        Diagnostic {
+            range: Range::default(),
+            severity: Some(DiagnosticSeverity::WARNING),
+            code: Some(NumberOrString::String("po/fuzzy".into())),
+            code_description: None,
+            source: Some("babel-lsp".into()),
+            message: "fuzzy".into(),
+            related_information: None,
+            tags: None,
+            data: None,
+        }
+    }
+
+    fn missing_diag() -> Diagnostic {
+        Diagnostic {
+            code: Some(NumberOrString::String("po/missing-translation".into())),
+            message: "missing".into(),
+            ..fuzzy_diag()
+        }
+    }
+
+    #[test]
+    fn filter_select_all_passes_everything() {
+        let cfg = DiagnosticsConfig {
+            select: vec!["all".into()],
+            ..DiagnosticsConfig::default()
+        };
+        let out = apply_diag_filter(vec![fuzzy_diag(), missing_diag()], &cfg);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn filter_select_specific_passes_only_listed() {
+        let cfg = DiagnosticsConfig {
+            select: vec!["po/fuzzy".into()],
+            ignore: vec![],
+            severity: Default::default(),
+        };
+        let out = apply_diag_filter(vec![fuzzy_diag(), missing_diag()], &cfg);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(&out[0].code, Some(NumberOrString::String(s)) if s == "po/fuzzy"));
+    }
+
+    #[test]
+    fn filter_ignore_drops_listed_code() {
+        let cfg = DiagnosticsConfig {
+            select: vec!["all".into()],
+            ignore: vec!["po/fuzzy".into()],
+            severity: Default::default(),
+        };
+        let out = apply_diag_filter(vec![fuzzy_diag(), missing_diag()], &cfg);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(&out[0].code, Some(NumberOrString::String(s)) if s == "po/missing-translation"));
+    }
+
+    #[test]
+    fn filter_severity_override_changes_level() {
+        let mut sev = std::collections::HashMap::new();
+        sev.insert("po/fuzzy".into(), "error".into());
+        let cfg = DiagnosticsConfig { select: vec!["all".into()], ignore: vec![], severity: sev };
+        let out = apply_diag_filter(vec![fuzzy_diag()], &cfg);
+        assert_eq!(out[0].severity, Some(DiagnosticSeverity::ERROR));
+    }
+
+    #[test]
+    fn filter_severity_invalid_string_clears_level() {
+        let mut sev = std::collections::HashMap::new();
+        sev.insert("po/fuzzy".into(), "bogus".into());
+        let cfg = DiagnosticsConfig { select: vec!["all".into()], ignore: vec![], severity: sev };
+        let out = apply_diag_filter(vec![fuzzy_diag()], &cfg);
+        assert_eq!(out[0].severity, None);
+    }
+
+    #[test]
+    fn filter_empty_input_returns_empty() {
+        let out = apply_diag_filter(vec![], &DiagnosticsConfig::default());
+        assert!(out.is_empty());
     }
 }
