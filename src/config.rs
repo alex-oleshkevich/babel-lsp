@@ -502,4 +502,74 @@ mod tests {
         let content = "[extractors]\n**.py = python\n";
         assert!(parse_babel_cfg_section(content).is_none());
     }
+
+    // --- merge() precedence for diagnostics.ignore / severity / pybabel_path ---
+
+    #[test]
+    fn merge_diagnostics_ignore_is_cumulative() {
+        // diagnostics.ignore from multiple sources must be combined, not replaced.
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "babel-lsp.toml",
+            "[diagnostics]\nignore = [\"po/fuzzy\"]\n",
+        );
+        write(
+            &dir,
+            "pyproject.toml",
+            "[tool.babel-lsp.diagnostics]\nignore = [\"po/missing-translation\"]\n",
+        );
+        let cfg = resolve_config(dir.path());
+        assert!(
+            cfg.diagnostics.ignore.contains(&"po/fuzzy".to_string()),
+            "po/fuzzy from babel-lsp.toml must be present"
+        );
+        assert!(
+            cfg.diagnostics
+                .ignore
+                .contains(&"po/missing-translation".to_string()),
+            "po/missing-translation from pyproject.toml must be present"
+        );
+    }
+
+    #[test]
+    fn merge_diagnostics_severity_later_overlay_wins() {
+        // diagnostics.severity is extended by each overlay; later entries
+        // overwrite earlier ones for the same rule key.
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir,
+            "babel-lsp.toml",
+            "[diagnostics.severity]\n\"po/fuzzy\" = \"warning\"\n",
+        );
+        write(
+            &dir,
+            "pyproject.toml",
+            "[tool.babel-lsp.diagnostics.severity]\n\"po/fuzzy\" = \"error\"\n",
+        );
+        let cfg = resolve_config(dir.path());
+        assert_eq!(
+            cfg.diagnostics.severity.get("po/fuzzy").map(String::as_str),
+            Some("error"),
+            "pyproject.toml (applied last) must override babel-lsp.toml severity"
+        );
+    }
+
+    #[test]
+    fn merge_pybabel_path_overlay_wins() {
+        // pybabel_path from a later config file must replace the earlier value.
+        let dir = TempDir::new().unwrap();
+        write(&dir, "babel-lsp.toml", "pybabel_path = \"/usr/bin/pybabel\"\n");
+        write(
+            &dir,
+            "pyproject.toml",
+            "[tool.babel-lsp]\npybabel_path = \"/venv/bin/pybabel\"\n",
+        );
+        let cfg = resolve_config(dir.path());
+        assert_eq!(
+            cfg.pybabel_path.as_deref(),
+            Some(std::path::Path::new("/venv/bin/pybabel")),
+            "pyproject.toml pybabel_path must override babel-lsp.toml"
+        );
+    }
 }
