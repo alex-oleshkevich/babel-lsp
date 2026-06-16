@@ -73,6 +73,7 @@ pub struct CatalogIndex {
     entries: HashMap<CatalogKey, Vec<CatalogEntry>>,
     pot_entries: HashMap<CatalogKey, CatalogEntry>,
     locales: BTreeSet<String>,
+    locales_by_domain: HashMap<String, BTreeSet<String>>,
     domains: BTreeSet<String>,
 }
 
@@ -83,11 +84,16 @@ impl CatalogIndex {
         let mut entries: HashMap<CatalogKey, Vec<CatalogEntry>> = HashMap::new();
         let mut pot_entries: HashMap<CatalogKey, CatalogEntry> = HashMap::new();
         let mut locales = BTreeSet::new();
+        let mut locales_by_domain: HashMap<String, BTreeSet<String>> = HashMap::new();
         let mut domains = BTreeSet::new();
 
         for entry in all_entries {
             if !entry.locale.is_empty() {
                 locales.insert(entry.locale.clone());
+                locales_by_domain
+                    .entry(entry.domain.clone())
+                    .or_default()
+                    .insert(entry.locale.clone());
             }
             domains.insert(entry.domain.clone());
             let key = entry.key();
@@ -103,6 +109,7 @@ impl CatalogIndex {
             entries,
             pot_entries,
             locales,
+            locales_by_domain,
             domains,
         }
     }
@@ -128,18 +135,44 @@ impl CatalogIndex {
     }
 
     /// Locales that have no translation or an empty msgstr for `key`.
+    ///
+    /// Missing-locale computation is scoped per domain: a locale is considered
+    /// missing only when it exists in a domain that carries `key` but has no
+    /// non-empty msgstr for it in that domain.  This prevents a translation in
+    /// domain 'admin' from masking a missing translation for the same msgid in
+    /// domain 'messages'.
     pub fn missing_locales(&self, key: &CatalogKey) -> Vec<String> {
-        let translated: std::collections::HashSet<&str> = self
-            .lookup(key)
-            .iter()
-            .filter(|e| e.msgstr.iter().any(|s| !s.is_empty()))
-            .map(|e| e.locale.as_str())
-            .collect();
-        self.locales
-            .iter()
-            .filter(|l| !translated.contains(l.as_str()))
-            .cloned()
-            .collect()
+        let all_entries = self.lookup(key);
+
+        // Collect the set of domains that have at least one entry for this key.
+        let mut domains_with_key: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
+        for e in all_entries {
+            domains_with_key.insert(e.domain.as_str());
+        }
+
+        let mut missing: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+        for domain in &domains_with_key {
+            let domain_locales = match self.locales_by_domain.get(*domain) {
+                Some(ls) => ls,
+                None => continue,
+            };
+            // Build translated set scoped to this domain.
+            let translated: std::collections::HashSet<&str> = all_entries
+                .iter()
+                .filter(|e| e.domain.as_str() == *domain)
+                .filter(|e| e.msgstr.iter().any(|s| !s.is_empty()))
+                .map(|e| e.locale.as_str())
+                .collect();
+            for locale in domain_locales {
+                if !translated.contains(locale.as_str()) {
+                    missing.insert(locale.clone());
+                }
+            }
+        }
+
+        missing.into_iter().collect()
     }
 
     /// All entries that came from a specific catalog file.
@@ -323,6 +356,27 @@ mod tests {
         let missing = idx.missing_locales(&CatalogKey::new("Checkout"));
         assert!(missing.contains(&"fr".to_string()));
         assert!(!missing.contains(&"de".to_string()));
+    }
+
+    #[test]
+    fn missing_locales_scoped_per_domain() {
+        // "Save" is translated in domain 'admin' for 'de', but absent/empty in
+        // domain 'messages' for 'de'.  The old code would report 'de' as NOT
+        // missing because it found a translation in another domain.
+        let mut admin_de = make_entry("de", "Save", "Speichern");
+        admin_de.domain = "admin".into();
+        admin_de.file_path = "/locale/de/admin.po".into();
+
+        let mut messages_de = make_entry("de", "Save", "");
+        messages_de.domain = "messages".into();
+
+        let idx = CatalogIndex::build(vec![admin_de, messages_de]);
+        let missing = idx.missing_locales(&CatalogKey::new("Save"));
+        // 'de' must appear: it is untranslated in domain 'messages'.
+        assert!(
+            missing.contains(&"de".to_string()),
+            "de should be missing in domain 'messages' even if translated in 'admin'"
+        );
     }
 
     #[test]
