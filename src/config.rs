@@ -46,8 +46,6 @@ pub struct Config {
     pub diagnostics: DiagnosticsConfig,
     pub unchanged: UnchangedConfig,
     pub pybabel_path: Option<PathBuf>,
-    pub log_level: Option<String>,
-    pub log_file: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -68,8 +66,6 @@ impl Default for Config {
             diagnostics: DiagnosticsConfig::default(),
             unchanged: UnchangedConfig::default(),
             pybabel_path: None,
-            log_level: None,
-            log_file: None,
         }
     }
 }
@@ -162,8 +158,6 @@ struct PartialConfig {
     diagnostics: PartialDiagnosticsConfig,
     unchanged: PartialUnchangedConfig,
     pybabel_path: Option<PathBuf>,
-    log_level: Option<String>,
-    log_file: Option<PathBuf>,
 }
 
 impl PartialConfig {
@@ -194,8 +188,6 @@ impl PartialConfig {
                 ignore: self.unchanged.ignore,
             },
             pybabel_path: self.pybabel_path,
-            log_level: self.log_level,
-            log_file: self.log_file,
         }
     }
 }
@@ -236,12 +228,6 @@ fn merge(base: &mut PartialConfig, overlay: PartialConfig) {
     base.unchanged.ignore.extend(overlay.unchanged.ignore);
     if overlay.pybabel_path.is_some() {
         base.pybabel_path = overlay.pybabel_path;
-    }
-    if overlay.log_level.is_some() {
-        base.log_level = overlay.log_level;
-    }
-    if overlay.log_file.is_some() {
-        base.log_file = overlay.log_file;
     }
 }
 

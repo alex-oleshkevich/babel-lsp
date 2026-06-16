@@ -957,6 +957,24 @@ impl LanguageServer for Backend {
 
         if is_catalog_uri(&uri) {
             self.state.trigger_rebuild();
+        } else if let Some(doc) = self.state.documents.get(&uri) {
+            // Re-publish source diagnostics: the saved text may differ from the last
+            // did_change state (e.g. formatter ran on save, or client sends full text
+            // only on save), so stale diagnostics would otherwise linger.
+            let text = doc.rope.to_string();
+            drop(doc);
+            let config = self.state.config.read().await;
+            let index = self.state.catalog_index.read().await;
+            let calls = extract_calls(&text, &uri, &config);
+            let mut diags = diagnostics::check_source(&calls, &index);
+            if config.detect_hardcoded_strings {
+                let extra = extra_keywords(&config);
+                diags.extend(hardcoded::check_source(text.as_bytes(), &uri, &extra));
+            }
+            let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
+            drop(index);
+            drop(config);
+            self.client.publish_diagnostics(uri, filtered, None).await;
         }
     }
 
