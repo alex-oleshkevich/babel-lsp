@@ -313,7 +313,7 @@ fn apply_fix_pass(
     }
 }
 
-fn find_workspace_root(start: &Path) -> Option<PathBuf> {
+pub(crate) fn find_workspace_root(start: &Path) -> Option<PathBuf> {
     let start = if start.is_file() { start.parent()? } else { start };
     for ancestor in start.ancestors() {
         if ancestor.join(".git").exists()

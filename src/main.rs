@@ -12,6 +12,7 @@ use server::Backend;
 use tower_lsp_server::{LspService, Server};
 
 use cli::check::{CheckArgs, run_check};
+use cli::stats::{StatsArgs, run_stats};
 
 #[derive(Parser)]
 #[command(
@@ -30,6 +31,8 @@ enum Command {
     Lsp,
     /// Run headless diagnostics (CI linter)
     Check(CheckArgs),
+    /// Print per-locale translation coverage
+    Stats(StatsArgs),
 }
 
 #[tokio::main]
@@ -38,6 +41,7 @@ async fn main() {
     match cli.command.unwrap_or(Command::Lsp) {
         Command::Lsp => run_lsp().await,
         Command::Check(args) => std::process::exit(run_check(args)),
+        Command::Stats(args) => std::process::exit(run_stats(args)),
     }
 }
 
