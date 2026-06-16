@@ -8,6 +8,43 @@ use tower_lsp_server::ls_types::{
 use crate::catalog::index::{CatalogEntry, CatalogIndex, CatalogKey};
 use crate::extract::types::{TranslationCall, UnresolvedReason};
 
+/// Every diagnostic code the engine can emit — used by the CLI to validate
+/// `--select`/`--ignore` arguments before running checks.
+pub const KNOWN_CODES: &[&str] = &[
+    "msg/empty-id",
+    "msg/format-before-call",
+    "msg/fstring-in-call",
+    "msg/implicit-concat",
+    "msg/missing-in-locale",
+    "msg/non-constant-id",
+    "msg/unknown-id",
+    "po/accelerator-mismatch",
+    "po/blank",
+    "po/bracket-count",
+    "po/double-space",
+    "po/duplicate-id",
+    "po/end-punctuation",
+    "po/escape-mismatch",
+    "po/extra-variable",
+    "po/format-mismatch",
+    "po/fuzzy",
+    "po/header-missing",
+    "po/missing-translation",
+    "po/newline-count",
+    "po/number-mismatch",
+    "po/obsolete",
+    "po/plural-count",
+    "po/repeated-word",
+    "po/same-plurals",
+    "po/unchanged",
+    "po/url-changed",
+    "po/whitespace-edges",
+    "po/xml-tag-mismatch",
+    "proj/inconsistent-translation",
+    "proj/missing-locale-file",
+    "proj/unused-id",
+];
+
 /// Run all source-side diagnostic checks (msg/*) over a set of translation calls.
 ///
 /// The returned `Diagnostic` slice has no URI — the caller binds them to the
