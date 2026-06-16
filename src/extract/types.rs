@@ -2,6 +2,23 @@ use std::collections::HashMap;
 
 use tower_lsp_server::ls_types::Range;
 
+/// Why a `TranslationCall`'s first argument could not be resolved to a string literal.
+///
+/// Used by the diagnostic "shape trio" (REQ-DIAG-06).  Only one reason fires per
+/// call — the most specific that matches.
+#[derive(Clone, Debug, PartialEq)]
+pub enum UnresolvedReason {
+    /// The argument is an f-string (`f"…"`).  gettext looks up the *interpolated*
+    /// text, never the template, so extraction always misses these.
+    FString,
+    /// The argument is a `str.format(…)` call or a `%` formatting expression —
+    /// formatting runs before the catalog lookup.
+    FormatBeforeCall,
+    /// The argument is a name, attribute, function call, or other non-literal.
+    /// `pybabel extract` cannot read it statically.
+    NonConstant,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum TranslationFunc {
     Gettext,
@@ -69,4 +86,13 @@ pub struct TranslationCall {
     pub range: Range,
     /// The msgid string literal alone (anchor for hover/goto/rename).
     pub msgid_range: Option<Range>,
+    /// Why the msgid argument could not be resolved (shape trio, REQ-DIAG-06).
+    /// `None` when `msgid` is `Some` or when the call has no argument at all.
+    pub unresolved_reason: Option<UnresolvedReason>,
+    /// Source range of the unresolved first argument (for diagnostic squiggles).
+    /// `None` when `unresolved_reason` is `None`.
+    pub unresolved_arg_range: Option<Range>,
+    /// `true` when the msgid was resolved from an implicit string concatenation
+    /// (`"a" "b"`) — triggers `msg/implicit-concat`.
+    pub is_implicit_concat: bool,
 }

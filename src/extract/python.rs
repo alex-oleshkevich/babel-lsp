@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tower_lsp_server::ls_types::{Position, Range};
 use tree_sitter::{Node, Parser};
 
-use super::types::{TranslationCall, TranslationFunc};
+use super::types::{TranslationCall, TranslationFunc, UnresolvedReason};
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -78,7 +78,31 @@ fn resolve_callee(node: Node, source: &[u8]) -> Option<String> {
 
 // ── Argument slot collection ──────────────────────────────────────────────────
 
-type Slot = Option<(String, Range)>;
+/// A resolved or unresolved positional argument slot.
+///
+/// `None` at the slot level means the argument was absent (iterator exhausted).
+enum SlotValue {
+    /// A regular string literal with its range.
+    Resolved(String, Range),
+    /// An implicit string concatenation (`"a" "b"`) — resolved but flagged for
+    /// `msg/implicit-concat`.
+    Concat(String, Range),
+    /// A non-literal argument: carries why it couldn't be resolved and its range
+    /// so the diagnostic squiggle can point at the right node.
+    Unresolved(UnresolvedReason, Range),
+}
+
+impl SlotValue {
+    /// Extract the string content, returning `None` for unresolved slots.
+    fn into_string(self) -> Option<String> {
+        match self {
+            Self::Resolved(s, _) | Self::Concat(s, _) => Some(s),
+            Self::Unresolved(_, _) => None,
+        }
+    }
+}
+
+type Slot = Option<SlotValue>;
 
 fn collect_slots(args_node: Node, source: &[u8]) -> Vec<Slot> {
     let mut cursor = args_node.walk();
@@ -86,12 +110,37 @@ fn collect_slots(args_node: Node, source: &[u8]) -> Vec<Slot> {
     for child in args_node.named_children(&mut cursor) {
         match child.kind() {
             "keyword_argument" => {} // positional slot count unaffected
-            "string" => slots.push(extract_string(child, source).map(|s| (s, node_range(child)))),
+            "string" => match extract_string(child, source) {
+                Some(s) => slots.push(Some(SlotValue::Resolved(s, node_range(child)))),
+                None => {
+                    let reason = fstring_reason(child, source);
+                    slots.push(Some(SlotValue::Unresolved(reason, node_range(child))));
+                }
+            },
             "concatenated_string" => {
                 let s = extract_concatenated(child, source);
-                slots.push(Some((s, node_range(child))));
+                slots.push(Some(SlotValue::Concat(s, node_range(child))));
             }
-            _ => slots.push(None), // non-string positional (variable, fstring, int…)
+            "call" => {
+                let reason = if is_format_method_call(child, source) {
+                    UnresolvedReason::FormatBeforeCall
+                } else {
+                    UnresolvedReason::NonConstant
+                };
+                slots.push(Some(SlotValue::Unresolved(reason, node_range(child))));
+            }
+            "binary_operator" => {
+                let reason = if is_percent_format(child, source) {
+                    UnresolvedReason::FormatBeforeCall
+                } else {
+                    UnresolvedReason::NonConstant
+                };
+                slots.push(Some(SlotValue::Unresolved(reason, node_range(child))));
+            }
+            _ => slots.push(Some(SlotValue::Unresolved(
+                UnresolvedReason::NonConstant,
+                node_range(child),
+            ))),
         }
     }
     slots
@@ -101,18 +150,22 @@ fn build_call(node: Node, func: TranslationFunc, slots: Vec<Slot>) -> Translatio
     let mut it = slots.into_iter();
     let domain = func
         .has_domain()
-        .then(|| it.next().flatten().map(|(s, _)| s))
+        .then(|| it.next().flatten().and_then(|sv| sv.into_string()))
         .flatten();
     let msgctxt = func
         .has_context()
-        .then(|| it.next().flatten().map(|(s, _)| s))
+        .then(|| it.next().flatten().and_then(|sv| sv.into_string()))
         .flatten();
-    let msgid_slot = it.next().flatten();
-    let msgid = msgid_slot.as_ref().map(|(s, _)| s.clone());
-    let msgid_range = msgid_slot.map(|(_, r)| r);
+    let (msgid, msgid_range, unresolved_reason, unresolved_arg_range, is_implicit_concat) =
+        match it.next().flatten() {
+            Some(SlotValue::Resolved(s, r)) => (Some(s), Some(r), None, None, false),
+            Some(SlotValue::Concat(s, r)) => (Some(s), Some(r), None, None, true),
+            Some(SlotValue::Unresolved(reason, r)) => (None, None, Some(reason), Some(r), false),
+            None => (None, None, None, None, false),
+        };
     let msgid_plural = func
         .has_plural()
-        .then(|| it.next().flatten().map(|(s, _)| s))
+        .then(|| it.next().flatten().and_then(|sv| sv.into_string()))
         .flatten();
     TranslationCall {
         func,
@@ -122,7 +175,39 @@ fn build_call(node: Node, func: TranslationFunc, slots: Vec<Slot>) -> Translatio
         domain,
         range: node_range(node),
         msgid_range,
+        unresolved_reason,
+        unresolved_arg_range,
+        is_implicit_concat,
     }
+}
+
+// ── Argument shape detection ──────────────────────────────────────────────────
+
+/// Classify a `"string"` node that `extract_string` rejected as f-string vs other.
+fn fstring_reason(node: Node, source: &[u8]) -> UnresolvedReason {
+    let text = node.utf8_text(source).unwrap_or_default();
+    let lower = text.to_ascii_lowercase();
+    if lower.starts_with('f') || lower.starts_with("rf") || lower.starts_with("fr") {
+        UnresolvedReason::FString
+    } else {
+        UnresolvedReason::NonConstant
+    }
+}
+
+/// `true` if `node` is a call whose callee attribute is literally `"format"`.
+fn is_format_method_call(node: Node, source: &[u8]) -> bool {
+    node.child_by_field_name("function")
+        .filter(|f| f.kind() == "attribute")
+        .and_then(|f| f.child_by_field_name("attribute"))
+        .and_then(|a| a.utf8_text(source).ok())
+        == Some("format")
+}
+
+/// `true` if `node` is a binary expression whose operator is `%`.
+fn is_percent_format(node: Node, source: &[u8]) -> bool {
+    node.child_by_field_name("operator")
+        .and_then(|op| op.utf8_text(source).ok())
+        == Some("%")
 }
 
 // ── String extraction ─────────────────────────────────────────────────────────
@@ -503,5 +588,58 @@ c = ngettext("%(n)d item", "%(n)d items", n)
 "#;
         let calls = ex(src);
         assert_eq!(calls.len(), 3);
+    }
+
+    // ── UnresolvedReason detection ────────────────────────────────────────────
+
+    #[test]
+    fn fstring_sets_fstring_reason() {
+        let calls = ex(r#"_(f"Hello {user}")"#);
+        assert_eq!(calls[0].unresolved_reason, Some(UnresolvedReason::FString));
+        assert!(calls[0].unresolved_arg_range.is_some(), "unresolved range must be set");
+    }
+
+    #[test]
+    fn percent_format_sets_format_before_call_reason() {
+        let calls = ex(r#"_("Hi %s" % name)"#);
+        assert_eq!(calls[0].unresolved_reason, Some(UnresolvedReason::FormatBeforeCall));
+        assert!(calls[0].unresolved_arg_range.is_some());
+    }
+
+    #[test]
+    fn format_method_sets_format_before_call_reason() {
+        let calls = ex(r#"_("Hello {}".format(name))"#);
+        assert_eq!(calls[0].unresolved_reason, Some(UnresolvedReason::FormatBeforeCall));
+    }
+
+    #[test]
+    fn variable_arg_sets_non_constant_reason() {
+        let calls = ex(r#"_(label)"#);
+        assert_eq!(calls[0].unresolved_reason, Some(UnresolvedReason::NonConstant));
+        assert!(calls[0].unresolved_arg_range.is_some());
+    }
+
+    #[test]
+    fn regular_string_has_no_reason() {
+        let calls = ex(r#"_("Hello")"#);
+        assert!(calls[0].unresolved_reason.is_none());
+        assert!(calls[0].unresolved_arg_range.is_none());
+        assert!(!calls[0].is_implicit_concat);
+    }
+
+    // ── is_implicit_concat ────────────────────────────────────────────────────
+
+    #[test]
+    fn implicit_concat_sets_flag() {
+        let calls = ex(r#"_("Hello " "World")"#);
+        assert!(calls[0].is_implicit_concat);
+        assert_eq!(calls[0].msgid.as_deref(), Some("Hello World"));
+        assert!(calls[0].unresolved_reason.is_none());
+    }
+
+    #[test]
+    fn single_string_does_not_set_concat_flag() {
+        let calls = ex(r#"_("Hello")"#);
+        assert!(!calls[0].is_implicit_concat);
     }
 }

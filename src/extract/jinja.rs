@@ -145,6 +145,9 @@ fn build_call(node: Node, func: TranslationFunc, slots: Vec<Slot>) -> Translatio
         domain,
         range: node_range(node),
         msgid_range,
+        unresolved_reason: None,
+        unresolved_arg_range: None,
+        is_implicit_concat: false,
     }
 }
 
@@ -198,6 +201,9 @@ fn extract_trans(node: Node, source: &[u8]) -> Option<TranslationCall> {
         domain: None,
         range: node_range(node),
         msgid_range,
+        unresolved_reason: None,
+        unresolved_arg_range: None,
+        is_implicit_concat: false,
     })
 }
 
