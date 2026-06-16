@@ -27,6 +27,8 @@ pub struct WorkspaceState {
     utf8_encoding: AtomicBool,
     /// Whether the client supports `workspace/didChangeWatchedFiles` dynamic registration.
     pub client_watches_files: AtomicBool,
+    /// Whether the client supports `workspace/inlayHint/refresh` (REQ-HINT-05).
+    inlay_hint_refresh_support: AtomicBool,
     pub workspace_root: OnceLock<PathBuf>,
     pub config: RwLock<Config>,
     pub catalog_files: RwLock<Vec<PathBuf>>,
@@ -43,6 +45,7 @@ impl WorkspaceState {
             doc_locks: DashMap::new(),
             utf8_encoding: AtomicBool::new(false),
             client_watches_files: AtomicBool::new(false),
+            inlay_hint_refresh_support: AtomicBool::new(false),
             workspace_root: OnceLock::new(),
             config: RwLock::new(Config::default()),
             catalog_files: RwLock::new(vec![]),
@@ -94,5 +97,15 @@ impl WorkspaceState {
     /// Store the native filesystem watcher so it stays alive for the server's lifetime.
     pub fn set_notify_watcher(&self, watcher: RecommendedWatcher) {
         let _ = self.notify_watcher.set(Mutex::new(watcher));
+    }
+
+    /// Record whether the client supports `workspace/inlayHint/refresh` (REQ-HINT-05).
+    pub fn set_inlay_hint_refresh_support(&self, val: bool) {
+        self.inlay_hint_refresh_support.store(val, Ordering::Relaxed);
+    }
+
+    /// Returns true if the client supports `workspace/inlayHint/refresh`.
+    pub fn inlay_hint_refresh_support(&self) -> bool {
+        self.inlay_hint_refresh_support.load(Ordering::Relaxed)
     }
 }

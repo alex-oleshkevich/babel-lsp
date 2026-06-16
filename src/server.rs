@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
 use crate::config::{Config, discover_locale_dirs, resolve_config};
-use crate::features::{completion, definition, diagnostics, document_link, hover, references};
+use crate::features::{completion, definition, diagnostics, document_link, hover, inlay_hint, references};
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -53,6 +53,15 @@ impl LanguageServer for Backend {
             .and_then(|f| f.dynamic_registration)
             .unwrap_or(false);
         self.state.set_client_watches_files(client_watches);
+
+        let hint_refresh = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.inlay_hint.as_ref())
+            .and_then(|h| h.refresh_support)
+            .unwrap_or(false);
+        self.state.set_inlay_hint_refresh_support(hint_refresh);
 
         let root_uri = params
             .workspace_folders
@@ -98,6 +107,9 @@ impl LanguageServer for Backend {
                     resolve_provider: Some(false),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 }),
+                inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
+                    InlayHintOptions::default(),
+                ))),
                 ..ServerCapabilities::default()
             },
         })
@@ -364,6 +376,28 @@ impl LanguageServer for Backend {
         Ok(if links.is_empty() { None } else { Some(links) })
     }
 
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let uri = params.text_document.uri;
+        if is_catalog_uri(&uri) {
+            return Ok(None);
+        }
+
+        let Some(doc) = self.state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let text = doc.rope.to_string();
+        drop(doc);
+
+        let config = self.state.config.read().await;
+        let Some(locale) = config.inlay_hint_locale.clone() else { return Ok(None) };
+        let calls = extract_calls(&text, &uri, &config);
+        drop(config);
+
+        let index = self.state.catalog_index.read().await;
+        let hints = inlay_hint::inlay_hints(&calls, &index, Some(&locale), params.range);
+        Ok(if hints.is_empty() { None } else { Some(hints) })
+    }
+
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         // REQ-CAT-09: client-side watcher events for .po/.pot files.
         let mut needs_rebuild = false;
@@ -599,6 +633,11 @@ async fn publish_diagnostics_after_rebuild(state: &Arc<WorkspaceState>, client: 
         let diags = diagnostics::check_source(&calls, &index);
         let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
         client.publish_diagnostics(uri.clone(), filtered, None).await;
+    }
+
+    // REQ-HINT-05: tell the client to re-request inlay hints for all open files.
+    if state.inlay_hint_refresh_support() {
+        let _ = client.inlay_hint_refresh().await;
     }
 }
 
