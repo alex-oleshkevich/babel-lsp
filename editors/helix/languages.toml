@@ -1,0 +1,22 @@
+# Merge into ~/.config/helix/languages.toml
+#
+# Order in language-servers matters: Helix routes hover/goto-definition to the
+# first server that advertises the capability. With pyright first on python,
+# its hover and goto stay primary while babel-lsp diagnostics, completion,
+# code actions, and symbols still run. On jinja and po, babel-lsp is primary.
+
+[language-server.babel-lsp]
+command = "babel-lsp"
+args = ["lsp", "--stdio"]
+
+[[language]]
+name = "python"
+language-servers = ["pyright", "babel-lsp"]
+
+[[language]]
+name = "jinja"
+language-servers = ["babel-lsp"]
+
+[[language]]
+name = "po"
+language-servers = ["babel-lsp"]
