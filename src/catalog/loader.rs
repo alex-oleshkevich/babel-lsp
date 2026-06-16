@@ -180,13 +180,11 @@ pub fn load_po_from_str(
     locale: &str,
     domain: &str,
 ) -> Result<Vec<CatalogEntry>, String> {
-    use std::io::Write as _;
-    let mut tmp = tempfile::NamedTempFile::new().map_err(|e| format!("tempfile: {e}"))?;
-    tmp.write_all(content.as_bytes())
-        .map_err(|e| format!("tempfile write: {e}"))?;
-    tmp.flush().map_err(|e| format!("tempfile flush: {e}"))?;
     let line_map = PoLineMap::build(content);
-    parse_po_content(tmp.path(), &line_map, original_path, locale, domain)
+    let cursor = std::io::Cursor::new(content.as_bytes());
+    let catalog = po_file::parse_from_reader(cursor)
+        .map_err(|e| format!("{}: {e}", original_path.display()))?;
+    parse_catalog(catalog, &line_map, original_path, locale, domain)
 }
 
 /// Internal: run polib on `po_path`, assign `file_path = original_path` in results.
@@ -199,6 +197,17 @@ fn parse_po_content(
 ) -> Result<Vec<CatalogEntry>, String> {
     let catalog =
         po_file::parse(po_path).map_err(|e| format!("{}: {e}", original_path.display()))?;
+    parse_catalog(catalog, line_map, original_path, locale, domain)
+}
+
+/// Internal: convert a parsed polib `Catalog` into `CatalogEntry` values.
+fn parse_catalog(
+    catalog: polib::catalog::Catalog,
+    line_map: &PoLineMap,
+    original_path: &Path,
+    locale: &str,
+    domain: &str,
+) -> Result<Vec<CatalogEntry>, String> {
     let mut entries = vec![];
     for msg in catalog.messages() {
         let msgid = msg.msgid().to_string();
