@@ -76,6 +76,58 @@ pub fn code_actions_for_po(
     actions
 }
 
+/// Compute deterministic fix `TextEdit`s for a PO file given a set of findings.
+///
+/// `finding_pairs` is `(0-based line, code)` per finding to fix. Only the four
+/// deterministic codes are handled: `po/missing-translation`, `po/fuzzy`,
+/// `po/format-mismatch`, `po/plural-count`. All others are silently skipped.
+///
+/// The returned edits are not yet sorted — pass them to `apply_text_edits`.
+pub fn fix_edits_for_file(
+    content: &str,
+    entries: &[&CatalogEntry],
+    finding_pairs: &[(u32, &str)],
+) -> Vec<TextEdit> {
+    let lines: Vec<&str> = content.lines().collect();
+    let spans = parse_entry_spans(content);
+    let nplurals = nplurals_from_entries(entries);
+    let mut edits = Vec::new();
+
+    for &(zero_based_line, code) in finding_pairs {
+        let Some(span) = span_at_line(&spans, zero_based_line) else { continue };
+        match code {
+            "po/missing-translation" => {
+                let Some(entry) = entry_for_span(entries, span) else { continue };
+                if !entry.msgid.is_empty() && entry.msgstr.iter().all(|s| s.is_empty()) {
+                    edits.push(compute_copy_msgid_edit(span, entry, &lines, nplurals));
+                }
+            }
+            "po/fuzzy" => {
+                if let Some(edit) = compute_remove_fuzzy_edit(span, &lines) {
+                    edits.push(edit);
+                }
+            }
+            "po/format-mismatch" => {
+                let Some(entry) = entry_for_span(entries, span) else { continue };
+                if !entry.msgid.is_empty() {
+                    edits.push(compute_fix_placeholder_edit(span, entry, &lines));
+                }
+            }
+            "po/plural-count" => {
+                if let Some(n) = nplurals {
+                    let existing = span.msgstr_count as u32;
+                    if existing < n {
+                        edits.push(compute_add_plural_forms_edit(span, existing, n));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    edits
+}
+
 // ── Action builders ───────────────────────────────────────────────────────────
 
 fn action_copy_msgid(
@@ -85,6 +137,15 @@ fn action_copy_msgid(
     uri: &Uri,
     nplurals: Option<u32>,
 ) -> CodeAction {
+    make_quickfix("Copy msgid to msgstr", uri, compute_copy_msgid_edit(span, entry, lines, nplurals))
+}
+
+fn compute_copy_msgid_edit(
+    span: &PoEntrySpan,
+    entry: &CatalogEntry,
+    lines: &[&str],
+    nplurals: Option<u32>,
+) -> TextEdit {
     let range = msgstr_replace_range(span, lines);
     let new_text = if entry.msgid_plural.is_some() {
         let forms = nplurals.unwrap_or(span.msgstr_count as u32).max(1);
@@ -97,10 +158,14 @@ fn action_copy_msgid(
     } else {
         format!("msgstr \"{}\"", escape_po(&entry.msgid))
     };
-    make_quickfix("Copy msgid to msgstr", uri, TextEdit { range, new_text })
+    TextEdit { range, new_text }
 }
 
 fn action_remove_fuzzy(span: &PoEntrySpan, lines: &[&str], uri: &Uri) -> Option<CodeAction> {
+    compute_remove_fuzzy_edit(span, lines).map(|edit| make_quickfix("Remove fuzzy", uri, edit))
+}
+
+fn compute_remove_fuzzy_edit(span: &PoEntrySpan, lines: &[&str]) -> Option<TextEdit> {
     let fl = span.flags_line?;
     let flags_content = lines.get(fl as usize)?;
     let after = flags_content.strip_prefix("#,")?.trim();
@@ -108,7 +173,6 @@ fn action_remove_fuzzy(span: &PoEntrySpan, lines: &[&str], uri: &Uri) -> Option<
         after.split(',').map(str::trim).filter(|f| *f != "fuzzy").collect();
 
     let (range, new_text) = if remaining.is_empty() {
-        // Delete the line including its trailing newline: range (fl, 0) → (fl+1, 0).
         let range = Range {
             start: Position { line: fl, character: 0 },
             end: Position { line: fl + 1, character: 0 },
@@ -118,7 +182,7 @@ fn action_remove_fuzzy(span: &PoEntrySpan, lines: &[&str], uri: &Uri) -> Option<
         let range = flags_line_range(span, lines)?;
         (range, format!("#, {}", remaining.join(", ")))
     };
-    Some(make_quickfix("Remove fuzzy", uri, TextEdit { range, new_text }))
+    Some(TextEdit { range, new_text })
 }
 
 fn action_mark_fuzzy(span: &PoEntrySpan, lines: &[&str], uri: &Uri) -> CodeAction {
@@ -133,7 +197,6 @@ fn action_mark_fuzzy(span: &PoEntrySpan, lines: &[&str], uri: &Uri) -> CodeActio
         let range = flags_line_range(span, lines).unwrap_or_default();
         (range, new)
     } else {
-        // Insert a new flags line before msgid via a zero-width insert.
         let range = Range {
             start: Position { line: span.msgid_line, character: 0 },
             end: Position { line: span.msgid_line, character: 0 },
@@ -149,13 +212,21 @@ fn action_fix_placeholder(
     lines: &[&str],
     uri: &Uri,
 ) -> CodeAction {
-    let range = msgstr_replace_range(span, lines);
-    let new_text = format!("msgstr \"{}\"", escape_po(&entry.msgid));
     make_quickfix(
         "Fix placeholder mismatch: copy msgid to msgstr",
         uri,
-        TextEdit { range, new_text },
+        compute_fix_placeholder_edit(span, entry, lines),
     )
+}
+
+fn compute_fix_placeholder_edit(
+    span: &PoEntrySpan,
+    entry: &CatalogEntry,
+    lines: &[&str],
+) -> TextEdit {
+    let range = msgstr_replace_range(span, lines);
+    let new_text = format!("msgstr \"{}\"", escape_po(&entry.msgid));
+    TextEdit { range, new_text }
 }
 
 fn action_add_plural_forms(
@@ -164,17 +235,21 @@ fn action_add_plural_forms(
     nplurals: u32,
     uri: &Uri,
 ) -> CodeAction {
+    make_quickfix(
+        &format!("Add {} missing plural form(s)", nplurals - existing),
+        uri,
+        compute_add_plural_forms_edit(span, existing, nplurals),
+    )
+}
+
+fn compute_add_plural_forms_edit(span: &PoEntrySpan, existing: u32, nplurals: u32) -> TextEdit {
     let insert_line = span.msgstr_end_line + 1;
     let range = Range {
         start: Position { line: insert_line, character: 0 },
         end: Position { line: insert_line, character: 0 },
     };
     let new_text = (existing..nplurals).map(|i| format!("msgstr[{i}] \"\"\n")).collect();
-    make_quickfix(
-        &format!("Add {} missing plural form(s)", nplurals - existing),
-        uri,
-        TextEdit { range, new_text },
-    )
+    TextEdit { range, new_text }
 }
 
 fn action_batch_copy(

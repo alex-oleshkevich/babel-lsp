@@ -1,4 +1,4 @@
-use tower_lsp_server::ls_types::{Position, Range};
+use tower_lsp_server::ls_types::{Position, Range, TextEdit};
 
 /// Positional span for one non-obsolete PO entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +143,55 @@ pub fn escape_po(s: &str) -> String {
         }
     }
     out
+}
+
+/// Apply a set of LSP `TextEdit`s to `content` and return the modified string.
+///
+/// Edits may be in any order — they are applied bottom-to-top (highest byte offset
+/// first) so earlier positions remain stable across successive replacements.
+/// Overlapping edits produce undefined results; callers must ensure disjointness.
+pub fn apply_text_edits(content: &str, edits: &[TextEdit]) -> String {
+    if edits.is_empty() {
+        return content.to_string();
+    }
+
+    // Map every (line, col) pair to a byte offset in the original content.
+    let mut line_starts: Vec<usize> = vec![0];
+    for (i, b) in content.bytes().enumerate() {
+        if b == b'\n' {
+            line_starts.push(i + 1);
+        }
+    }
+
+    let offset_of = |line: u32, col: u32| -> usize {
+        let start = *line_starts.get(line as usize).unwrap_or(&content.len());
+        let next = *line_starts.get(line as usize + 1).unwrap_or(&content.len());
+        // End of the line's *content* (excluding the newline byte).
+        let content_end = if next > start && content.as_bytes().get(next - 1) == Some(&b'\n') {
+            next - 1
+        } else {
+            next
+        };
+        start + (col as usize).min(content_end.saturating_sub(start))
+    };
+
+    let mut byte_edits: Vec<(usize, usize, String)> = edits
+        .iter()
+        .map(|e| {
+            let start = offset_of(e.range.start.line, e.range.start.character);
+            let end = offset_of(e.range.end.line, e.range.end.character);
+            (start, end, e.new_text.clone())
+        })
+        .collect();
+
+    // Apply from the bottom of the file upward so earlier byte offsets stay valid.
+    byte_edits.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut result = content.to_string();
+    for (start, end, new_text) in byte_edits {
+        result.replace_range(start..end, &new_text);
+    }
+    result
 }
 
 /// Scan backwards from `msgid_idx` to find the nearest `#,` flags line.
