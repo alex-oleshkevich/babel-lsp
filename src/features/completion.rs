@@ -3,7 +3,7 @@ use tower_lsp_server::ls_types::*;
 
 use crate::catalog::index::{CatalogIndex, CatalogKey};
 use crate::extract::types::TranslationCall;
-use crate::util::{PositionEncoding, char_offset_to_lsp_pos, lsp_pos_to_char_offset};
+use crate::util::{PositionEncoding, char_offset_to_lsp_pos, lsp_pos_to_char_offset, pos_in_range};
 
 /// Build completion items for a msgid position in a translation call.
 ///
@@ -118,19 +118,6 @@ fn build_item(key: &CatalogKey, index: &CatalogIndex, prefix_range: Range) -> Co
     }
 }
 
-/// Returns true when `pos` falls within `range` (inclusive start, exclusive end).
-fn pos_in_range(pos: Position, range: Range) -> bool {
-    if pos.line < range.start.line || pos.line > range.end.line {
-        return false;
-    }
-    if pos.line == range.start.line && pos.character < range.start.character {
-        return false;
-    }
-    if pos.line == range.end.line && pos.character >= range.end.character {
-        return false;
-    }
-    true
-}
 
 /// Given the start position of a string node (pointing at the opening quote /
 /// string prefix), scan forward to find where the string content begins, then

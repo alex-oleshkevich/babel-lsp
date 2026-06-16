@@ -13,7 +13,7 @@ use walkdir::WalkDir;
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
 use crate::config::{Config, discover_locale_dirs, resolve_config};
-use crate::features::{completion, hover};
+use crate::features::{completion, definition, document_link, hover, references};
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -91,6 +91,12 @@ impl LanguageServer for Backend {
                 // REQ-CPL-02: quote characters trigger msgid completion.
                 completion_provider: Some(completion_provider_options()),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
+                document_link_provider: Some(DocumentLinkOptions {
+                    resolve_provider: Some(false),
+                    work_done_progress_options: WorkDoneProgressOptions::default(),
+                }),
                 ..ServerCapabilities::default()
             },
         })
@@ -217,6 +223,142 @@ impl LanguageServer for Backend {
         let config = self.state.config.read().await;
         let calls = extract_calls(&text, &uri, &config);
         Ok(hover::hover_source(&calls, pos, &index))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+
+        if is_catalog_uri(&uri) {
+            return Ok(None); // definition from .po goes nowhere meaningful
+        }
+        let Some(doc) = self.state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let rope = doc.rope.clone();
+        drop(doc);
+        let text = rope.to_string();
+        let config = self.state.config.read().await;
+        let calls = extract_calls(&text, &uri, &config);
+        drop(config);
+        let index = self.state.catalog_index.read().await;
+        Ok(definition::goto_definition(&calls, pos, &index))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri;
+        let pos = params.text_document_position.position;
+
+        // Resolve the key from the cursor position.
+        let key = if is_catalog_uri(&uri) {
+            let index = self.state.catalog_index.read().await;
+            if let Some(path) = uri.to_file_path() {
+                let file_entries = index.entries_for_file(&path);
+                let cursor_line = pos.line + 1;
+                file_entries
+                    .iter()
+                    .find(|e| e.line == cursor_line)
+                    .map(|e| e.key())
+            } else {
+                None
+            }
+        } else {
+            let Some(doc) = self.state.documents.get(&uri) else {
+                return Ok(None);
+            };
+            let rope = doc.rope.clone();
+            drop(doc);
+            let text = rope.to_string();
+            let config = self.state.config.read().await;
+            let calls = extract_calls(&text, &uri, &config);
+            drop(config);
+            calls
+                .iter()
+                .find(|c| {
+                    c.msgid.is_some()
+                        && c.msgid_range.is_some_and(|r| crate::util::pos_in_range(pos, r))
+                })
+                .map(|c| crate::catalog::index::CatalogKey {
+                    msgid: c.msgid.clone().unwrap_or_default(),
+                    msgctxt: c.msgctxt.clone(),
+                })
+        };
+
+        let Some(key) = key else { return Ok(None) };
+
+        // Collect call sites: open documents.
+        let config = self.state.config.read().await;
+        let mut call_sites: Vec<(Uri, Vec<crate::extract::types::TranslationCall>)> = Vec::new();
+
+        for entry in self.state.documents.iter() {
+            let doc_uri = entry.key().clone();
+            if is_catalog_uri(&doc_uri) {
+                continue;
+            }
+            let text = entry.value().rope.to_string();
+            let calls = extract_calls(&text, &doc_uri, &config);
+            if !calls.is_empty() {
+                call_sites.push((doc_uri, calls));
+            }
+        }
+
+        // Workspace scan (REQ-NAV-06).
+        if let Some(root) = self.state.workspace_root.get() {
+            let open_uris: std::collections::HashSet<String> = call_sites
+                .iter()
+                .map(|(u, _)| u.to_string())
+                .collect();
+            let jinja_exts: Vec<String> = config.jinja_extensions.clone();
+            let root = root.clone();
+            let extra = config
+                .extra_keywords
+                .iter()
+                .filter_map(|kw| {
+                    crate::extract::types::TranslationFunc::from_name(kw)
+                        .map(|f| (kw.clone(), f))
+                })
+                .collect::<std::collections::HashMap<_, _>>();
+            drop(config);
+
+            // Walk on a blocking thread to avoid holding async executor.
+            let scanned = tokio::task::spawn_blocking(move || {
+                scan_workspace_for_calls(&root, &jinja_exts, &extra, &open_uris)
+            })
+            .await
+            .unwrap_or_default();
+            call_sites.extend(scanned);
+        } else {
+            drop(config);
+        }
+
+        let index = self.state.catalog_index.read().await;
+        let locs = references::find_references(&key, &index, call_sites);
+        Ok(if locs.is_empty() { None } else { Some(locs) })
+    }
+
+    async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
+        let uri = params.text_document.uri;
+        if !is_catalog_uri(&uri) {
+            return Ok(None);
+        }
+        // Use the open buffer if available; otherwise return None.
+        let Some(doc) = self.state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let text = doc.rope.to_string();
+        drop(doc);
+
+        let workspace_root = self.state.workspace_root.get().map(|p| p.as_path());
+        let catalog_dir = uri
+            .to_file_path()
+            .map(|p| p.parent().map(|d| d.to_path_buf()).unwrap_or_default())
+            .unwrap_or_default();
+
+        let links = document_link::document_links(&text, &catalog_dir, workspace_root);
+        Ok(if links.is_empty() { None } else { Some(links) })
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
@@ -617,6 +759,65 @@ fn has_indicator(path: &Path, indicators: &[String]) -> bool {
         .iter()
         .filter(|ind| !ind.is_empty())
         .any(|ind| bytes.windows(ind.len()).any(|w| w == ind.as_bytes()))
+}
+
+/// REQ-NAV-06: walk from `root`, collect source files, skip noise directories.
+fn scan_workspace_for_calls(
+    root: &std::path::Path,
+    jinja_exts: &[String],
+    extra: &std::collections::HashMap<String, crate::extract::types::TranslationFunc>,
+    skip_uris: &std::collections::HashSet<String>,
+) -> Vec<(Uri, Vec<crate::extract::types::TranslationCall>)> {
+    const PRUNE: &[&str] = &[
+        ".git", "target", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
+    ];
+
+    let mut results = Vec::new();
+
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| {
+            !e.file_type().is_dir()
+                || e.file_name()
+                    .to_str()
+                    .map(|n| !PRUNE.contains(&n))
+                    .unwrap_or(true)
+        })
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        let path = entry.path();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+
+        let is_py = ext == "py";
+        let is_jinja = jinja_exts
+            .iter()
+            .any(|je| je.trim_start_matches('.') == ext);
+
+        if !is_py && !is_jinja {
+            continue;
+        }
+
+        let Some(uri) = Uri::from_file_path(path) else { continue };
+        if skip_uris.contains(&uri.to_string()) {
+            continue; // already covered by an open document
+        }
+
+        let Ok(bytes) = std::fs::read(path) else { continue };
+        let calls = if is_py {
+            crate::extract::python::extract(&bytes, extra)
+        } else {
+            crate::extract::jinja::extract(&bytes, extra)
+        };
+
+        if !calls.is_empty() {
+            results.push((uri, calls));
+        }
+    }
+    results
 }
 
 fn completion_provider_options() -> CompletionOptions {

@@ -1,10 +1,24 @@
 use ropey::{Rope, RopeSlice};
-use tower_lsp_server::ls_types::Position;
+use tower_lsp_server::ls_types::{Position, Range};
 
 #[derive(Clone, Copy)]
 pub enum PositionEncoding {
     Utf8,
     Utf16,
+}
+
+/// Returns true when `pos` is within `range` (inclusive start, exclusive end).
+pub fn pos_in_range(pos: Position, range: Range) -> bool {
+    if pos.line < range.start.line || pos.line > range.end.line {
+        return false;
+    }
+    if pos.line == range.start.line && pos.character < range.start.character {
+        return false;
+    }
+    if pos.line == range.end.line && pos.character >= range.end.character {
+        return false;
+    }
+    true
 }
 
 pub fn char_offset_to_lsp_pos(rope: &Rope, char_offset: usize, enc: PositionEncoding) -> Position {

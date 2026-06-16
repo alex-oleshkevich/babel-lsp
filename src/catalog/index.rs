@@ -150,6 +150,11 @@ impl CatalogIndex {
             .collect()
     }
 
+    /// The `.pot` template entry for the key, if it exists.
+    pub fn lookup_pot(&self, key: &CatalogKey) -> Option<&CatalogEntry> {
+        self.pot_entries.get(key)
+    }
+
     /// Whether the key exists in the `.pot` template.
     pub fn is_in_pot(&self, key: &CatalogKey) -> bool {
         self.pot_entries.contains_key(key)
