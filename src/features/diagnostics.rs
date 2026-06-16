@@ -121,8 +121,9 @@ pub fn check_source(calls: &[TranslationCall], index: &CatalogIndex) -> Vec<Diag
                     format!("msgid '{}' is in no catalog or template", msgid),
                 ));
             }
-        } else {
-            // msg/missing-in-locale: known but some locales have empty msgstr
+        } else if in_po {
+            // msg/missing-in-locale: known in .po but some locales have empty msgstr.
+            // When the key is only in .pot (not yet merged into any .po), stay silent.
             let missing = index.missing_locales(&key);
             if !missing.is_empty() {
                 if let Some(r) = call.msgid_range {
@@ -687,7 +688,7 @@ fn proj_unused_id(
 }
 
 fn proj_missing_locale_file(index: &CatalogIndex, out: &mut HashMap<Uri, Vec<Diagnostic>>) {
-    // Build a map of domain → (set of locales that have entries, one example path).
+    // Build a map of domain → (set of locales that have entries, one example .po path).
     let mut by_domain: HashMap<String, (std::collections::BTreeSet<String>, std::path::PathBuf)> =
         HashMap::new();
 
@@ -701,10 +702,25 @@ fn proj_missing_locale_file(index: &CatalogIndex, out: &mut HashMap<Uri, Vec<Dia
         }
     }
 
+    // Build a per-domain pot file path map by iterating pot entries.
+    let mut pot_path_by_domain: HashMap<&str, &std::path::Path> = HashMap::new();
+    for key in index.all_pot_keys() {
+        if let Some(entry) = index.lookup_pot(key) {
+            pot_path_by_domain
+                .entry(entry.domain.as_str())
+                .or_insert(entry.file_path.as_path());
+        }
+    }
+
     let all_locales = index.all_locales();
 
     for (domain, (domain_locales, example_path)) in &by_domain {
-        let Some(uri) = Uri::from_file_path(example_path) else { continue };
+        // Prefer anchoring to the .pot file for this domain; fall back to example .po path.
+        let anchor_path: &std::path::Path = pot_path_by_domain
+            .get(domain.as_str())
+            .copied()
+            .unwrap_or(example_path.as_path());
+        let Some(uri) = Uri::from_file_path(anchor_path) else { continue };
         for locale in all_locales {
             if domain_locales.contains(locale) { continue; }
             out.entry(uri.clone()).or_default().push(make_diag(
