@@ -446,23 +446,54 @@ impl LanguageServer for Backend {
         params: CodeActionParams,
     ) -> Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri.clone();
-        if !is_catalog_uri(&uri) {
-            return Ok(None);
-        }
-        let Some(doc) = self.state.documents.get(&uri) else {
-            return Ok(None);
-        };
-        let content = doc.rope.to_string();
-        drop(doc);
+        let is_catalog = is_catalog_uri(&uri);
+        let is_config = is_config_uri(&uri);
 
-        let Some(path) = uri.to_file_path() else { return Ok(None) };
-        let index = self.state.catalog_index.read().await;
-        let entries = index.entries_for_file(&path);
-        let actions = code_action::code_actions_for_po(&params, &content, &entries, &uri);
-        if actions.is_empty() {
+        if !is_catalog && !is_config {
             return Ok(None);
         }
-        Ok(Some(actions.into_iter().map(CodeActionOrCommand::CodeAction).collect()))
+
+        let has_locale_dirs = {
+            let config = self.state.config.read().await;
+            self.state
+                .workspace_root
+                .get()
+                .map(|root| !discover_locale_dirs(root, &config).is_empty())
+                .unwrap_or(false)
+        };
+
+        if is_catalog {
+            let Some(doc) = self.state.documents.get(&uri) else {
+                return Ok(None);
+            };
+            let content = doc.rope.to_string();
+            drop(doc);
+
+            let Some(path) = uri.to_file_path() else { return Ok(None) };
+            let index = self.state.catalog_index.read().await;
+            let entries = index.entries_for_file(&path);
+            let mut actions =
+                code_action::code_actions_for_po(&params, &content, &entries, &uri);
+            actions.extend(code_action::command_actions_for_po(has_locale_dirs));
+            if actions.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some(
+                actions.into_iter().map(CodeActionOrCommand::CodeAction).collect(),
+            ));
+        }
+
+        if is_config {
+            let actions = code_action::command_actions_for_config(has_locale_dirs);
+            if actions.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some(
+                actions.into_iter().map(CodeActionOrCommand::CodeAction).collect(),
+            ));
+        }
+
+        Ok(None)
     }
 
     async fn prepare_rename(
@@ -793,6 +824,17 @@ fn is_catalog_uri(uri: &Uri) -> bool {
             .and_then(|e| e.to_str()),
         Some("po" | "pot")
     )
+}
+
+/// Returns true if `uri` points to `babel.cfg` or `pyproject.toml` — files where
+/// the "Extract messages" command action is anchored (REQ-CMD-03).
+fn is_config_uri(uri: &Uri) -> bool {
+    uri.to_file_path()
+        .as_deref()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .map(|n| n == "babel.cfg" || n == "pyproject.toml")
+        .unwrap_or(false)
 }
 
 /// Rebuild the catalog index from all known catalog files.
@@ -1799,5 +1841,19 @@ mod tests {
         let triggers = opts.trigger_characters.as_deref().unwrap_or_default();
         assert!(triggers.contains(&"\"".to_string()), "double-quote trigger missing");
         assert!(triggers.contains(&"'".to_string()), "single-quote trigger missing");
+    }
+
+    // ── REQ-CMD-03: is_config_uri ─────────────────────────────────────────────
+
+    #[test]
+    fn req_cmd_03_is_config_uri_detects_babel_cfg_and_pyproject() {
+        let babel_cfg = Uri::from_file_path("/project/babel.cfg").unwrap();
+        let pyproject = Uri::from_file_path("/project/pyproject.toml").unwrap();
+        let unrelated = Uri::from_file_path("/project/setup.py").unwrap();
+        assert!(is_config_uri(&babel_cfg));
+        assert!(is_config_uri(&pyproject));
+        assert!(!is_config_uri(&unrelated));
+        // Catalog files are not config files.
+        assert!(!is_config_uri(&Uri::from_file_path("/locale/de/messages.po").unwrap()));
     }
 }

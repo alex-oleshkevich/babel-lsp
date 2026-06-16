@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use tower_lsp_server::ls_types::{
-    CodeAction, CodeActionKind, CodeActionParams, NumberOrString, Position, Range, TextEdit, Uri,
-    WorkspaceEdit,
+    CodeAction, CodeActionKind, CodeActionParams, Command, NumberOrString, Position, Range,
+    TextEdit, Uri, WorkspaceEdit,
 };
 
 use crate::catalog::index::CatalogEntry;
@@ -319,6 +319,42 @@ fn nplurals_from_entries(entries: &[&CatalogEntry]) -> Option<u32> {
     parse_nplurals(msgstr)
 }
 
+/// Command actions for `.po`/`.pot` files: "Update from template" + "Compile catalog" (REQ-CMD-03).
+///
+/// Returns empty when no locale dirs are configured — the commands have nowhere to operate.
+pub fn command_actions_for_po(has_locale_dirs: bool) -> Vec<CodeAction> {
+    if !has_locale_dirs {
+        return vec![];
+    }
+    vec![
+        make_command_action("Update from template", "babel-lsp.update"),
+        make_command_action("Compile catalog", "babel-lsp.compile"),
+    ]
+}
+
+/// Command action for `babel.cfg` / `pyproject.toml`: "Extract messages" (REQ-CMD-03).
+///
+/// Returns empty when no locale dirs are configured.
+pub fn command_actions_for_config(has_locale_dirs: bool) -> Vec<CodeAction> {
+    if !has_locale_dirs {
+        return vec![];
+    }
+    vec![make_command_action("Extract messages", "babel-lsp.extract")]
+}
+
+fn make_command_action(title: &str, command_id: &str) -> CodeAction {
+    CodeAction {
+        title: title.to_string(),
+        kind: Some(CodeActionKind::SOURCE),
+        command: Some(Command {
+            title: title.to_string(),
+            command: command_id.to_string(),
+            arguments: None,
+        }),
+        ..CodeAction::default()
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -585,5 +621,56 @@ mod tests {
         let e2 = entry("B", "", 4);
         let actions = code_actions_for_po(&params(0), content, &[&e1, &e2], &uri());
         assert!(!actions.iter().any(|a| a.title.contains("entries")));
+    }
+
+    // ── REQ-CMD-02 / REQ-CMD-03: command actions ─────────────────────────────
+
+    #[test]
+    fn req_cmd_02_command_action_carries_command_not_edit() {
+        let actions = command_actions_for_po(true);
+        for action in &actions {
+            assert!(action.command.is_some(), "action {:?} must have a Command", action.title);
+            assert!(action.edit.is_none(), "action {:?} must not have an edit", action.title);
+        }
+    }
+
+    #[test]
+    fn req_cmd_03_po_actions_offer_update_and_compile() {
+        let actions = command_actions_for_po(true);
+        assert!(actions.iter().any(|a| a.title == "Update from template"));
+        assert!(actions.iter().any(|a| a.title == "Compile catalog"));
+        assert!(!actions.iter().any(|a| a.title == "Extract messages"));
+    }
+
+    #[test]
+    fn req_cmd_03_config_action_offers_extract() {
+        let actions = command_actions_for_config(true);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].title, "Extract messages");
+    }
+
+    #[test]
+    fn req_cmd_03_command_ids_are_correct() {
+        let po_actions = command_actions_for_po(true);
+        let update = po_actions.iter().find(|a| a.title == "Update from template").unwrap();
+        assert_eq!(update.command.as_ref().unwrap().command, "babel-lsp.update");
+        let compile = po_actions.iter().find(|a| a.title == "Compile catalog").unwrap();
+        assert_eq!(compile.command.as_ref().unwrap().command, "babel-lsp.compile");
+
+        let cfg_actions = command_actions_for_config(true);
+        assert_eq!(cfg_actions[0].command.as_ref().unwrap().command, "babel-lsp.extract");
+    }
+
+    #[test]
+    fn req_cmd_03_no_actions_when_no_locale_dirs() {
+        assert!(command_actions_for_po(false).is_empty());
+        assert!(command_actions_for_config(false).is_empty());
+    }
+
+    #[test]
+    fn req_cmd_03_command_actions_are_source_kind() {
+        for action in command_actions_for_po(true).iter().chain(command_actions_for_config(true).iter()) {
+            assert_eq!(action.kind, Some(CodeActionKind::SOURCE), "action '{}' must be SOURCE kind", action.title);
+        }
     }
 }
