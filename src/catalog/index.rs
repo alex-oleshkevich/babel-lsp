@@ -71,7 +71,9 @@ impl CatalogEntry {
 #[allow(dead_code)]
 pub struct CatalogIndex {
     entries: HashMap<CatalogKey, Vec<CatalogEntry>>,
-    pot_entries: HashMap<CatalogKey, CatalogEntry>,
+    /// Keyed by (domain, CatalogKey) so that the same msgid in two different
+    /// domains does not overwrite each other.
+    pot_entries: HashMap<(String, CatalogKey), CatalogEntry>,
     locales: BTreeSet<String>,
     locales_by_domain: HashMap<String, BTreeSet<String>>,
     domains: BTreeSet<String>,
@@ -82,7 +84,7 @@ impl CatalogIndex {
     /// Build the index from a flat list of loaded entries.
     pub fn build(all_entries: Vec<CatalogEntry>) -> Self {
         let mut entries: HashMap<CatalogKey, Vec<CatalogEntry>> = HashMap::new();
-        let mut pot_entries: HashMap<CatalogKey, CatalogEntry> = HashMap::new();
+        let mut pot_entries: HashMap<(String, CatalogKey), CatalogEntry> = HashMap::new();
         let mut locales = BTreeSet::new();
         let mut locales_by_domain: HashMap<String, BTreeSet<String>> = HashMap::new();
         let mut domains = BTreeSet::new();
@@ -98,8 +100,8 @@ impl CatalogIndex {
             domains.insert(entry.domain.clone());
             let key = entry.key();
             if entry.locale.is_empty() {
-                // .pot template
-                pot_entries.insert(key, entry);
+                // .pot template — include domain in key to avoid cross-domain collisions
+                pot_entries.insert((entry.domain.clone(), key), entry);
             } else {
                 entries.entry(key).or_default().push(entry);
             }
@@ -186,18 +188,34 @@ impl CatalogIndex {
     }
 
     /// The `.pot` template entry for the key, if it exists.
+    ///
+    /// When the same msgid is present in multiple domains, returns the entry
+    /// with the lexicographically smallest file path for determinism.
     pub fn lookup_pot(&self, key: &CatalogKey) -> Option<&CatalogEntry> {
-        self.pot_entries.get(key)
+        self.pot_entries
+            .iter()
+            .filter(|((_, k), _)| k == key)
+            .map(|(_, e)| e)
+            .min_by_key(|e| &e.file_path)
     }
 
-    /// Whether the key exists in the `.pot` template.
+    /// Whether the key exists in any `.pot` template.
     pub fn is_in_pot(&self, key: &CatalogKey) -> bool {
-        self.pot_entries.contains_key(key)
+        self.pot_entries.keys().any(|(_, k)| k == key)
     }
 
-    /// Every key present in the `.pot` template.
+    /// Every distinct key present in the `.pot` templates.
+    ///
+    /// Duplicates across domains are deduplicated; order is unspecified.
     pub fn all_pot_keys(&self) -> impl Iterator<Item = &CatalogKey> {
-        self.pot_entries.keys()
+        // The HashMap guarantees that each (domain, CatalogKey) pair is unique,
+        // but the same CatalogKey may appear under different domains.  We deduplicate
+        // by returning only the first occurrence of each CatalogKey value.
+        let mut seen: std::collections::HashSet<&CatalogKey> = std::collections::HashSet::new();
+        self.pot_entries
+            .keys()
+            .map(|(_, k)| k)
+            .filter(move |k| seen.insert(k))
     }
 
     /// Returns `true` if the index has no entries.
@@ -205,9 +223,15 @@ impl CatalogIndex {
         self.entries.is_empty() && self.pot_entries.is_empty()
     }
 
-    /// Returns the file path of the first `.pot` template loaded.
+    /// Returns the lexicographically smallest `.pot` template file path.
+    ///
+    /// Using the minimum path makes the result deterministic regardless of
+    /// HashMap iteration order or how many `.pot` files are loaded.
     pub fn pot_file_path(&self) -> Option<&Path> {
-        self.pot_entries.values().next().map(|e| e.file_path.as_path())
+        self.pot_entries
+            .values()
+            .map(|e| e.file_path.as_path())
+            .min()
     }
 
     /// Returns all unique `.po` locale file paths (sorted, deduplicated).
@@ -432,5 +456,39 @@ mod tests {
     fn po_file_paths_empty_when_no_po_entries() {
         let idx = CatalogIndex::build(vec![]);
         assert!(idx.po_file_paths().is_empty());
+    }
+
+    #[test]
+    fn pot_entries_cross_domain_no_collision() {
+        // Same msgid in two different domains — both must survive.
+        let mut pot_a = make_entry("", "Save", "");
+        pot_a.domain = "messages".into();
+        pot_a.file_path = PathBuf::from("/locale/messages.pot");
+
+        let mut pot_b = make_entry("", "Save", "");
+        pot_b.domain = "admin".into();
+        pot_b.file_path = PathBuf::from("/locale/admin.pot");
+
+        let idx = CatalogIndex::build(vec![pot_a, pot_b]);
+
+        // The key must be found
+        assert!(idx.is_in_pot(&CatalogKey::new("Save")));
+        // Both domains preserved: pot_entries has 2 entries
+        assert_eq!(idx.pot_entries.len(), 2);
+    }
+
+    #[test]
+    fn pot_file_path_deterministic_with_multiple_pots() {
+        let mut pot_a = make_entry("", "Save", "");
+        pot_a.domain = "admin".into();
+        pot_a.file_path = PathBuf::from("/locale/admin.pot");
+
+        let mut pot_b = make_entry("", "Checkout", "");
+        pot_b.domain = "messages".into();
+        pot_b.file_path = PathBuf::from("/locale/messages.pot");
+
+        let idx = CatalogIndex::build(vec![pot_a, pot_b]);
+        // min by path: /locale/admin.pot < /locale/messages.pot
+        assert_eq!(idx.pot_file_path(), Some(Path::new("/locale/admin.pot")));
     }
 }
