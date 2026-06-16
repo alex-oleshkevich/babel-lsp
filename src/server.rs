@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
 use crate::config::{Config, discover_locale_dirs, resolve_config};
-use crate::features::{completion, definition, diagnostics, document_link, hover, inlay_hint, references};
+use crate::features::{completion, definition, diagnostics, document_link, document_symbol, hover, inlay_hint, references};
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -103,6 +103,8 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 document_link_provider: Some(DocumentLinkOptions {
                     resolve_provider: Some(false),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
@@ -396,6 +398,38 @@ impl LanguageServer for Backend {
         let index = self.state.catalog_index.read().await;
         let hints = inlay_hint::inlay_hints(&calls, &index, Some(&locale), params.range);
         Ok(if hints.is_empty() { None } else { Some(hints) })
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri;
+        if !is_catalog_uri(&uri) {
+            return Ok(None);
+        }
+        let Some(path) = uri.to_file_path() else { return Ok(None) };
+        let index = self.state.catalog_index.read().await;
+        let entries = index.entries_for_file(&path);
+        let symbols = document_symbol::document_symbols(&entries);
+        Ok(if symbols.is_empty() {
+            None
+        } else {
+            Some(DocumentSymbolResponse::Nested(symbols))
+        })
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<WorkspaceSymbolResponse>> {
+        let index = self.state.catalog_index.read().await;
+        let symbols = document_symbol::workspace_symbols(&index, &params.query);
+        Ok(if symbols.is_empty() {
+            None
+        } else {
+            Some(WorkspaceSymbolResponse::Nested(symbols))
+        })
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
