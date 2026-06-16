@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
 use crate::config::{Config, discover_locale_dirs, resolve_config};
-use crate::features::{completion, definition, diagnostics, document_link, document_symbol, hover, inlay_hint, references};
+use crate::features::{code_action, completion, definition, diagnostics, document_link, document_symbol, hover, inlay_hint, references};
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -112,6 +112,7 @@ impl LanguageServer for Backend {
                 inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
                     InlayHintOptions::default(),
                 ))),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -430,6 +431,30 @@ impl LanguageServer for Backend {
         } else {
             Some(WorkspaceSymbolResponse::Nested(symbols))
         })
+    }
+
+    async fn code_action(
+        &self,
+        params: CodeActionParams,
+    ) -> Result<Option<CodeActionResponse>> {
+        let uri = params.text_document.uri.clone();
+        if !is_catalog_uri(&uri) {
+            return Ok(None);
+        }
+        let Some(doc) = self.state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let content = doc.rope.to_string();
+        drop(doc);
+
+        let Some(path) = uri.to_file_path() else { return Ok(None) };
+        let index = self.state.catalog_index.read().await;
+        let entries = index.entries_for_file(&path);
+        let actions = code_action::code_actions_for_po(&params, &content, &entries, &uri);
+        if actions.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(actions.into_iter().map(CodeActionOrCommand::CodeAction).collect()))
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {

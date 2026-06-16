@@ -1,3 +1,6 @@
+pub mod plural;
+pub mod po_edit;
+
 use ropey::{Rope, RopeSlice};
 use tower_lsp_server::ls_types::{Position, Range};
 
