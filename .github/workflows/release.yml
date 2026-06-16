@@ -1,0 +1,155 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches Cargo.toml
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[0].version')
+          test "$tag" = "$crate" || {
+            echo "tag $tag != Cargo.toml $crate"; exit 1; }
+
+  build:
+    needs: version-check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu,  os: ubuntu-latest,  name: linux-x86_64  }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest,  name: linux-aarch64, cross: true }
+          - { target: x86_64-apple-darwin,       os: macos-13,       name: macos-x86_64  }
+          - { target: aarch64-apple-darwin,       os: macos-latest,   name: macos-aarch64 }
+          - { target: x86_64-pc-windows-msvc,    os: windows-latest, name: windows-x86_64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cross
+        if: matrix.cross == true
+        run: cargo install cross --locked
+      - name: Build (cross)
+        if: matrix.cross == true
+        run: cross build --release --target ${{ matrix.target }}
+      - name: Build
+        if: matrix.cross != true
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Strip binary
+        if: runner.os != 'Windows'
+        run: strip target/${{ matrix.target }}/release/babel-lsp
+      - name: Rename artifact
+        shell: bash
+        run: |
+          ext=""
+          [[ "${{ runner.os }}" == "Windows" ]] && ext=".exe"
+          cp "target/${{ matrix.target }}/release/babel-lsp${ext}" \
+             "babel-lsp-${{ matrix.name }}${ext}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: babel-lsp-${{ matrix.name }}
+          path: babel-lsp-${{ matrix.name }}*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Package Zed extension
+        run: ./scripts/package-zed-extension.sh dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**
+          generate_release_notes: true
+
+  publish-pypi:
+    needs: version-check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu,  os: ubuntu-latest  }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest  }
+          - { target: x86_64-apple-darwin,       os: macos-13       }
+          - { target: aarch64-apple-darwin,       os: macos-latest   }
+          - { target: x86_64-pc-windows-msvc,    os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: publish
+          target: ${{ matrix.target }}
+          args: --no-sdist --skip-existing
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+
+  publish-aur:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bump AUR PKGBUILD
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          GH_REPO: ${{ github.repository }}
+          GH_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${GH_TAG#v}"
+          CHECKSUM=$(curl -sL \
+            "https://github.com/${GH_REPO}/releases/download/${GH_TAG}/babel-lsp-linux-x86_64" \
+            | sha256sum | cut -d' ' -f1)
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$AUR_SSH_KEY" > ~/.ssh/aur_rsa
+          chmod 600 ~/.ssh/aur_rsa
+          ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts
+
+          git clone -c core.sshCommand="ssh -i ~/.ssh/aur_rsa" \
+            ssh://aur@aur.archlinux.org/babel-lsp.git /tmp/aur-babel-lsp
+
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" /tmp/aur-babel-lsp/PKGBUILD
+          sed -i "s/^sha256sums=.*/sha256sums=('${CHECKSUM}')/" /tmp/aur-babel-lsp/PKGBUILD
+
+          cd /tmp/aur-babel-lsp
+          git config user.email "ci@babel-lsp.dev"
+          git config user.name "babel-lsp CI"
+          git add PKGBUILD .SRCINFO
+          git commit -m "bump to ${VERSION}"
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_rsa" git push
+
+  publish-homebrew:
+    needs: release
+    runs-on: macos-latest
+    steps:
+      - name: Bump Homebrew formula
+        env:
+          HOMEBREW_GITHUB_TOKEN: ${{ secrets.HOMEBREW_GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GH_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${GH_TAG#v}"
+          CHECKSUM=$(curl -sL \
+            "https://github.com/${GH_REPO}/releases/download/${GH_TAG}/babel-lsp-macos-aarch64" \
+            | shasum -a 256 | cut -d' ' -f1)
+          brew tap alex-oleshkevich/tap https://github.com/alex-oleshkevich/homebrew-tap
+          brew bump-formula-pr \
+            --version "${VERSION}" \
+            --url "https://github.com/${GH_REPO}/releases/download/${GH_TAG}/babel-lsp-macos-aarch64" \
+            --sha256 "${CHECKSUM}" \
+            --no-audit --no-browse \
+            alex-oleshkevich/tap/babel-lsp
