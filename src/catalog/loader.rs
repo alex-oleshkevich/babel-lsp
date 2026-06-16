@@ -105,7 +105,7 @@ impl PoLineMap {
                         msgid,
                         msgctxt: pending_ctxt.take(),
                     };
-                    map.insert(key, msgid_line);
+                    map.entry(key).or_insert(msgid_line);
                 } else {
                     pending_ctxt = None;
                 }
@@ -396,6 +396,22 @@ mod tests {
         let map = PoLineMap::build(content);
         assert_eq!(map.get_line(&CatalogKey::new("Alpha")), Some(4));
         assert_eq!(map.get_line(&CatalogKey::new("Beta")), Some(7));
+    }
+
+    #[test]
+    fn line_map_duplicate_msgid_keeps_first() {
+        // A file with a duplicated msgid: the line map must record the FIRST occurrence.
+        let content = concat!(
+            "msgid \"\"\nmsgstr \"\"\n\n",
+            "msgid \"Duplicate\"\n",
+            "msgstr \"First\"\n",
+            "\n",
+            "msgid \"Duplicate\"\n",
+            "msgstr \"Second\"\n",
+        );
+        let map = PoLineMap::build(content);
+        // Line 4 is the first occurrence; line 7 is the duplicate.
+        assert_eq!(map.get_line(&CatalogKey::new("Duplicate")), Some(4));
     }
 
     #[test]
