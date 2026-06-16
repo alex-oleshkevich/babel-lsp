@@ -14,6 +14,7 @@ pub const KNOWN_CODES: &[&str] = &[
     "msg/empty-id",
     "msg/format-before-call",
     "msg/fstring-in-call",
+    "msg/hardcoded-string",
     "msg/implicit-concat",
     "msg/missing-in-locale",
     "msg/non-constant-id",

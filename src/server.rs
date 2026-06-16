@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
 use crate::config::{Config, discover_locale_dirs, resolve_config};
-use crate::features::{code_action, completion, definition, diagnostics, document_link, document_symbol, hover, inlay_hint, pybabel, references, rename};
+use crate::features::{code_action, completion, definition, diagnostics, document_link, document_symbol, hardcoded, hover, inlay_hint, pybabel, references, rename};
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -740,7 +740,16 @@ impl LanguageServer for Backend {
             diagnostics::check_catalog(&file_entries, &uri, &index)
         } else {
             let calls = extract_calls(&params.text_document.text, &uri, &config);
-            diagnostics::check_source(&calls, &index)
+            let mut diags = diagnostics::check_source(&calls, &index);
+            if config.detect_hardcoded_strings {
+                let extra = extra_keywords(&config);
+                diags.extend(hardcoded::check_source(
+                    params.text_document.text.as_bytes(),
+                    &uri,
+                    &extra,
+                ));
+            }
+            diags
         };
         let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
         drop(index);
@@ -774,7 +783,11 @@ impl LanguageServer for Backend {
             let config = self.state.config.read().await;
             let index = self.state.catalog_index.read().await;
             let calls = extract_calls(&text, &uri, &config);
-            let diags = diagnostics::check_source(&calls, &index);
+            let mut diags = diagnostics::check_source(&calls, &index);
+            if config.detect_hardcoded_strings {
+                let extra = extra_keywords(&config);
+                diags.extend(hardcoded::check_source(text.as_bytes(), &uri, &extra));
+            }
             let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
             drop(index);
             drop(config);
@@ -943,7 +956,11 @@ async fn publish_diagnostics_after_rebuild(state: &Arc<WorkspaceState>, client: 
     // Source-side diagnostics: re-check all open source files.
     for (uri, text) in &open_sources {
         let calls = extract_calls(text, uri, &config);
-        let diags = diagnostics::check_source(&calls, &index);
+        let mut diags = diagnostics::check_source(&calls, &index);
+        if config.detect_hardcoded_strings {
+            let extra = extra_keywords(&config);
+            diags.extend(hardcoded::check_source(text.as_bytes(), uri, &extra));
+        }
         let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
         client.publish_diagnostics(uri.clone(), filtered, None).await;
     }
@@ -997,6 +1014,18 @@ async fn collect_all_source_calls(
 }
 
 // ── Source file dispatch helpers ──────────────────────────────────────────────
+
+fn extra_keywords(
+    config: &Config,
+) -> std::collections::HashMap<String, crate::extract::types::TranslationFunc> {
+    config
+        .extra_keywords
+        .iter()
+        .filter_map(|kw| {
+            crate::extract::types::TranslationFunc::from_name(kw).map(|f| (kw.clone(), f))
+        })
+        .collect()
+}
 
 /// Extract translation calls from a source file, picking the right extractor
 /// based on the file extension. Returns an empty vec for unknown file types.
