@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -562,24 +563,85 @@ async fn publish_diagnostics_after_rebuild(state: &Arc<WorkspaceState>, client: 
         })
         .collect();
 
+    // Collect all source calls for project checks (open buffers + disk scan).
+    let all_calls = collect_all_source_calls(state, &open_sources, &config).await;
+
     let index = state.catalog_index.read().await;
 
-    // Catalog-side diagnostics: one publish per .po/.pot file.
+    // Catalog + project diagnostics merged by URI.
+    // Pre-insert every catalog URI with an empty Vec so that files with no
+    // new findings still get published (clearing previously-shown diagnostics).
+    let mut catalog_diags: HashMap<Uri, Vec<Diagnostic>> = HashMap::new();
+    for disk_path in &catalog_files {
+        if let Some(uri) = Uri::from_file_path(disk_path) {
+            catalog_diags.insert(uri, vec![]);
+        }
+    }
     for disk_path in &catalog_files {
         let Some(uri) = Uri::from_file_path(disk_path) else { continue };
         let file_entries = index.entries_for_file(disk_path);
-        let diags = diagnostics::check_catalog(&file_entries, &uri, &index);
+        catalog_diags
+            .entry(uri.clone())
+            .or_default()
+            .extend(diagnostics::check_catalog(&file_entries, &uri, &index));
+    }
+    for (uri, pdiags) in diagnostics::check_project(&index, &all_calls) {
+        catalog_diags.entry(uri).or_default().extend(pdiags);
+    }
+    for (uri, diags) in catalog_diags {
         let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
         client.publish_diagnostics(uri, filtered, None).await;
     }
 
     // Source-side diagnostics: re-check all open source files.
-    for (uri, text) in open_sources {
-        let calls = extract_calls(&text, &uri, &config);
+    for (uri, text) in &open_sources {
+        let calls = extract_calls(text, uri, &config);
         let diags = diagnostics::check_source(&calls, &index);
         let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
-        client.publish_diagnostics(uri, filtered, None).await;
+        client.publish_diagnostics(uri.clone(), filtered, None).await;
     }
+}
+
+/// Collect all source-file translation calls for project-level checks.
+///
+/// Combines open-buffer calls with a disk scan of workspace source files that
+/// are not currently open in the editor.
+async fn collect_all_source_calls(
+    state: &Arc<WorkspaceState>,
+    open_sources: &[(Uri, String)],
+    config: &Config,
+) -> Vec<crate::extract::types::TranslationCall> {
+    let mut calls: Vec<crate::extract::types::TranslationCall> = open_sources
+        .iter()
+        .flat_map(|(uri, text)| extract_calls(text, uri, config))
+        .collect();
+
+    let Some(root) = state.workspace_root.get().cloned() else {
+        return calls;
+    };
+
+    let skip_uris: std::collections::HashSet<String> =
+        open_sources.iter().map(|(uri, _)| uri.to_string()).collect();
+    let extra: std::collections::HashMap<String, crate::extract::types::TranslationFunc> = config
+        .extra_keywords
+        .iter()
+        .filter_map(|kw| {
+            crate::extract::types::TranslationFunc::from_name(kw).map(|f| (kw.clone(), f))
+        })
+        .collect();
+    let jinja_exts = config.jinja_extensions.clone();
+
+    let disk = tokio::task::spawn_blocking(move || {
+        scan_workspace_for_calls(&root, &jinja_exts, &extra, &skip_uris)
+    })
+    .await
+    .unwrap_or_default();
+
+    for (_, file_calls) in disk {
+        calls.extend(file_calls);
+    }
+
+    calls
 }
 
 // ── Source file dispatch helpers ──────────────────────────────────────────────

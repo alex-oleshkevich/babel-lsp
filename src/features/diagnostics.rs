@@ -536,6 +536,149 @@ pub fn check_catalog(
     diags
 }
 
+/// Run project-level diagnostic checks (proj/*) across the full catalog index.
+///
+/// Returns diagnostics grouped by file URI — the caller merges them with
+/// per-file catalog diagnostics before publishing.
+pub fn check_project(
+    index: &CatalogIndex,
+    all_calls: &[crate::extract::types::TranslationCall],
+) -> HashMap<Uri, Vec<Diagnostic>> {
+    let mut out: HashMap<Uri, Vec<Diagnostic>> = HashMap::new();
+    proj_inconsistent_translation(index, &mut out);
+    proj_unused_id(index, all_calls, &mut out);
+    proj_missing_locale_file(index, &mut out);
+    out
+}
+
+fn proj_inconsistent_translation(index: &CatalogIndex, out: &mut HashMap<Uri, Vec<Diagnostic>>) {
+    for key in index.all_msgids() {
+        let entries = index.lookup(key);
+
+        // Group non-fuzzy, non-obsolete, non-empty entries by locale.
+        let mut by_locale: HashMap<&str, Vec<&CatalogEntry>> = HashMap::new();
+        for e in entries {
+            if e.flags.obsolete || e.flags.fuzzy { continue; }
+            if e.msgstr.iter().all(|s| s.is_empty()) { continue; }
+            by_locale.entry(e.locale.as_str()).or_default().push(e);
+        }
+
+        for locale_entries in by_locale.values() {
+            if locale_entries.len() < 2 { continue; }
+            let first = &locale_entries[0].msgstr;
+            if locale_entries.iter().all(|e| &e.msgstr == first) { continue; }
+
+            let related: Vec<DiagnosticRelatedInformation> = locale_entries
+                .iter()
+                .filter_map(|e| {
+                    let uri = Uri::from_file_path(&e.file_path)?;
+                    let label = e.msgstr.first().map(|s| s.as_str()).unwrap_or("").to_string();
+                    Some(DiagnosticRelatedInformation {
+                        location: Location { uri, range: entry_range(e) },
+                        message: label,
+                    })
+                })
+                .collect();
+
+            for e in locale_entries {
+                let Some(uri) = Uri::from_file_path(&e.file_path) else { continue };
+                out.entry(uri).or_default().push(Diagnostic {
+                    range: entry_range(e),
+                    severity: Some(DiagnosticSeverity::INFORMATION),
+                    code: Some(NumberOrString::String("proj/inconsistent-translation".into())),
+                    code_description: None,
+                    source: Some("babel-lsp".into()),
+                    message: format!(
+                        "conflicting translations for '{}' in locale '{}'",
+                        key.msgid, e.locale
+                    ),
+                    related_information: Some(related.clone()),
+                    tags: None,
+                    data: None,
+                });
+            }
+        }
+    }
+}
+
+fn proj_unused_id(
+    index: &CatalogIndex,
+    all_calls: &[crate::extract::types::TranslationCall],
+    out: &mut HashMap<Uri, Vec<Diagnostic>>,
+) {
+    // P4 gate: any unresolved call could match any id, so absence is unprovable.
+    if all_calls.iter().any(|c| c.msgid.is_none()) {
+        return;
+    }
+
+    let referenced: std::collections::HashSet<CatalogKey> = all_calls
+        .iter()
+        .filter_map(|c| {
+            c.msgid.as_ref().map(|id| CatalogKey {
+                msgid: id.clone(),
+                msgctxt: c.msgctxt.clone(),
+            })
+        })
+        .collect();
+
+    for key in index.all_msgids() {
+        if referenced.contains(key) { continue; }
+        for entry in index.lookup(key) {
+            if entry.flags.obsolete { continue; }
+            let Some(uri) = Uri::from_file_path(&entry.file_path) else { continue };
+            out.entry(uri).or_default().push(make_diag(
+                entry_range(entry),
+                "proj/unused-id",
+                DiagnosticSeverity::HINT,
+                format!("msgid '{}' is not referenced in any source file", key.msgid),
+            ));
+        }
+    }
+
+    for key in index.all_pot_keys() {
+        if referenced.contains(key) { continue; }
+        let Some(entry) = index.lookup_pot(key) else { continue };
+        let Some(uri) = Uri::from_file_path(&entry.file_path) else { continue };
+        out.entry(uri).or_default().push(make_diag(
+            entry_range(entry),
+            "proj/unused-id",
+            DiagnosticSeverity::HINT,
+            format!("msgid '{}' is not referenced in any source file", key.msgid),
+        ));
+    }
+}
+
+fn proj_missing_locale_file(index: &CatalogIndex, out: &mut HashMap<Uri, Vec<Diagnostic>>) {
+    // Build a map of domain → (set of locales that have entries, one example path).
+    let mut by_domain: HashMap<String, (std::collections::BTreeSet<String>, std::path::PathBuf)> =
+        HashMap::new();
+
+    for key in index.all_msgids() {
+        for entry in index.lookup(key) {
+            if entry.flags.obsolete || entry.locale.is_empty() { continue; }
+            let (locales, _) = by_domain
+                .entry(entry.domain.clone())
+                .or_insert_with(|| (Default::default(), entry.file_path.clone()));
+            locales.insert(entry.locale.clone());
+        }
+    }
+
+    let all_locales = index.all_locales();
+
+    for (domain, (domain_locales, example_path)) in &by_domain {
+        let Some(uri) = Uri::from_file_path(example_path) else { continue };
+        for locale in all_locales {
+            if domain_locales.contains(locale) { continue; }
+            out.entry(uri.clone()).or_default().push(make_diag(
+                Range::default(),
+                "proj/missing-locale-file",
+                DiagnosticSeverity::INFORMATION,
+                format!("no '.po' for locale '{}' in domain '{}'", locale, domain),
+            ));
+        }
+    }
+}
+
 // ── catalog helpers ───────────────────────────────────────────────────────────
 
 fn entry_range(entry: &CatalogEntry) -> Range {
@@ -1707,5 +1850,160 @@ mod tests {
     fn filter_empty_input_returns_empty() {
         let out = apply_diag_filter(vec![], &DiagnosticsConfig::default());
         assert!(out.is_empty());
+    }
+
+    // ── check_project helpers ─────────────────────────────────────────────────
+
+    use crate::extract::types::TranslationCall;
+
+    fn po_entry2(locale: &str, domain: &str, file: &str, msgid: &str, msgstr: &str) -> CatalogEntry {
+        CatalogEntry {
+            locale: locale.into(),
+            domain: domain.into(),
+            msgid: msgid.into(),
+            msgctxt: None,
+            msgid_plural: None,
+            msgstr: vec![msgstr.into()],
+            flags: EntryFlags { fuzzy: false, obsolete: false },
+            file_path: PathBuf::from(file),
+            line: 5,
+        }
+    }
+
+    fn source_call(msgid: &str) -> TranslationCall {
+        TranslationCall {
+            func: TranslationFunc::Gettext,
+            msgid: Some(msgid.into()),
+            msgid_plural: None,
+            msgctxt: None,
+            domain: None,
+            range: Range::default(),
+            msgid_range: None,
+            unresolved_reason: None,
+            unresolved_arg_range: None,
+            is_implicit_concat: false,
+        }
+    }
+
+    fn unresolved_call() -> TranslationCall {
+        TranslationCall {
+            func: TranslationFunc::Gettext,
+            msgid: None,
+            msgid_plural: None,
+            msgctxt: None,
+            domain: None,
+            range: Range::default(),
+            msgid_range: None,
+            unresolved_reason: Some(crate::extract::types::UnresolvedReason::NonConstant),
+            unresolved_arg_range: None,
+            is_implicit_concat: false,
+        }
+    }
+
+    fn proj_check(entries: Vec<CatalogEntry>, calls: Vec<TranslationCall>) -> HashMap<Uri, Vec<Diagnostic>> {
+        let index = CatalogIndex::build(entries);
+        check_project(&index, &calls)
+    }
+
+    fn any_code(out: &HashMap<Uri, Vec<Diagnostic>>, code: &str) -> bool {
+        out.values().flatten().any(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == code))
+    }
+
+    // ── proj/inconsistent-translation ────────────────────────────────────────
+
+    #[test]
+    fn inconsistent_fires_when_same_locale_has_divergent_msgstr() {
+        let e1 = po_entry2("de", "messages", "/locale/de/a/messages.po", "Checkout", "Kasse");
+        let e2 = po_entry2("de", "messages", "/locale/de/b/messages.po", "Checkout", "Bezahlen");
+        let out = proj_check(vec![e1, e2], vec![]);
+        assert!(any_code(&out, "proj/inconsistent-translation"), "got: {:?}", out);
+    }
+
+    #[test]
+    fn inconsistent_carries_related_information() {
+        let e1 = po_entry2("de", "messages", "/locale/de/a/messages.po", "Checkout", "Kasse");
+        let e2 = po_entry2("de", "messages", "/locale/de/b/messages.po", "Checkout", "Bezahlen");
+        let index = CatalogIndex::build(vec![e1, e2]);
+        let out = check_project(&index, &[]);
+        let diag = out.values().flatten()
+            .find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "proj/inconsistent-translation"))
+            .expect("expected proj/inconsistent-translation");
+        assert!(diag.related_information.as_ref().map(|r| r.len() >= 2).unwrap_or(false));
+    }
+
+    #[test]
+    fn inconsistent_silent_when_same_msgstr() {
+        let e1 = po_entry2("de", "messages", "/locale/de/a/messages.po", "Checkout", "Kasse");
+        let e2 = po_entry2("de", "messages", "/locale/de/b/messages.po", "Checkout", "Kasse");
+        let out = proj_check(vec![e1, e2], vec![]);
+        assert!(!any_code(&out, "proj/inconsistent-translation"));
+    }
+
+    #[test]
+    fn inconsistent_silent_for_different_locales() {
+        let de = po_entry2("de", "messages", "/locale/de/messages.po", "Checkout", "Kasse");
+        let fr = po_entry2("fr", "messages", "/locale/fr/messages.po", "Checkout", "Caisse");
+        let out = proj_check(vec![de, fr], vec![]);
+        assert!(!any_code(&out, "proj/inconsistent-translation"));
+    }
+
+    #[test]
+    fn inconsistent_skips_fuzzy_entries() {
+        let e1 = po_entry2("de", "messages", "/locale/de/a/messages.po", "Checkout", "Kasse");
+        let mut e2 = po_entry2("de", "messages", "/locale/de/b/messages.po", "Checkout", "Bezahlen");
+        e2.flags.fuzzy = true;
+        let out = proj_check(vec![e1, e2], vec![]);
+        assert!(!any_code(&out, "proj/inconsistent-translation"));
+    }
+
+    // ── proj/unused-id ────────────────────────────────────────────────────────
+
+    #[test]
+    fn unused_id_fires_when_no_source_call_references_entry() {
+        let e = po_entry2("de", "messages", "/locale/de/messages.po", "Checkout", "Kasse");
+        let out = proj_check(vec![e], vec![]); // no calls at all
+        assert!(any_code(&out, "proj/unused-id"), "got: {:?}", out);
+    }
+
+    #[test]
+    fn unused_id_silent_when_call_references_id() {
+        let e = po_entry2("de", "messages", "/locale/de/messages.po", "Checkout", "Kasse");
+        let out = proj_check(vec![e], vec![source_call("Checkout")]);
+        assert!(!any_code(&out, "proj/unused-id"));
+    }
+
+    #[test]
+    fn unused_id_silent_p4_gate_on_unresolved_call() {
+        let e = po_entry2("de", "messages", "/locale/de/messages.po", "Checkout", "Kasse");
+        let out = proj_check(vec![e], vec![unresolved_call()]);
+        assert!(!any_code(&out, "proj/unused-id"));
+    }
+
+    #[test]
+    fn unused_id_fires_on_pot_entries() {
+        let mut pot = po_entry2("", "messages", "/locale/messages.pot", "Checkout", "");
+        pot.locale = "".into(); // pot entry has empty locale
+        let index = CatalogIndex::build(vec![pot]);
+        let out = check_project(&index, &[]);
+        assert!(any_code(&out, "proj/unused-id"), "pot entry should fire unused-id, got: {:?}", out);
+    }
+
+    // ── proj/missing-locale-file ──────────────────────────────────────────────
+
+    #[test]
+    fn missing_locale_fires_when_locale_absent_from_domain() {
+        let de = po_entry2("de", "messages", "/locale/de/messages.po", "Checkout", "Kasse");
+        let fr = po_entry2("fr", "other", "/locale/fr/other.po", "Checkout", "Caisse");
+        let out = proj_check(vec![de, fr], vec![]);
+        // de has no "other" domain; fr has no "messages" domain
+        assert!(any_code(&out, "proj/missing-locale-file"), "got: {:?}", out);
+    }
+
+    #[test]
+    fn missing_locale_silent_when_all_locales_covered() {
+        let de = po_entry2("de", "messages", "/locale/de/messages.po", "Checkout", "Kasse");
+        let fr = po_entry2("fr", "messages", "/locale/fr/messages.po", "Checkout", "Caisse");
+        let out = proj_check(vec![de, fr], vec![]);
+        assert!(!any_code(&out, "proj/missing-locale-file"));
     }
 }

@@ -160,6 +160,11 @@ impl CatalogIndex {
         self.pot_entries.contains_key(key)
     }
 
+    /// Every key present in the `.pot` template.
+    pub fn all_pot_keys(&self) -> impl Iterator<Item = &CatalogKey> {
+        self.pot_entries.keys()
+    }
+
     /// Returns `true` if the index has no entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty() && self.pot_entries.is_empty()
