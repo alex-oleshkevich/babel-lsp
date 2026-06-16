@@ -29,6 +29,8 @@ pub struct WorkspaceState {
     pub client_watches_files: AtomicBool,
     /// Whether the client supports `workspace/inlayHint/refresh` (REQ-HINT-05).
     inlay_hint_refresh_support: AtomicBool,
+    /// Whether the client supports `workspace/codeLens/refresh` (REQ-LENS-07).
+    code_lens_refresh_support: AtomicBool,
     pub workspace_root: OnceLock<PathBuf>,
     pub config: RwLock<Config>,
     pub catalog_files: RwLock<Vec<PathBuf>>,
@@ -46,6 +48,7 @@ impl WorkspaceState {
             utf8_encoding: AtomicBool::new(false),
             client_watches_files: AtomicBool::new(false),
             inlay_hint_refresh_support: AtomicBool::new(false),
+            code_lens_refresh_support: AtomicBool::new(false),
             workspace_root: OnceLock::new(),
             config: RwLock::new(Config::default()),
             catalog_files: RwLock::new(vec![]),
@@ -107,5 +110,15 @@ impl WorkspaceState {
     /// Returns true if the client supports `workspace/inlayHint/refresh`.
     pub fn inlay_hint_refresh_support(&self) -> bool {
         self.inlay_hint_refresh_support.load(Ordering::Relaxed)
+    }
+
+    /// Record whether the client supports `workspace/codeLens/refresh` (REQ-LENS-07).
+    pub fn set_code_lens_refresh_support(&self, val: bool) {
+        self.code_lens_refresh_support.store(val, Ordering::Relaxed);
+    }
+
+    /// Returns true if the client supports `workspace/codeLens/refresh`.
+    pub fn code_lens_refresh_support(&self) -> bool {
+        self.code_lens_refresh_support.load(Ordering::Relaxed)
     }
 }

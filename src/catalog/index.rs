@@ -1,11 +1,13 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 // ── CatalogKey ────────────────────────────────────────────────────────────────
 
 /// The lookup key for every catalog feature: msgid + optional msgctxt.
 #[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CatalogKey {
     pub msgid: String,
     pub msgctxt: Option<String>,

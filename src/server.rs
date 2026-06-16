@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
 use crate::config::{Config, discover_locale_dirs, resolve_config};
-use crate::features::{code_action, completion, definition, diagnostics, document_link, document_symbol, hardcoded, hover, inlay_hint, pybabel, references, rename};
+use crate::features::{code_action, code_lens, completion, definition, diagnostics, document_link, document_symbol, hardcoded, hover, inlay_hint, pybabel, references, rename};
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -62,6 +62,15 @@ impl LanguageServer for Backend {
             .and_then(|h| h.refresh_support)
             .unwrap_or(false);
         self.state.set_inlay_hint_refresh_support(hint_refresh);
+
+        let lens_refresh = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.code_lens.as_ref())
+            .and_then(|cl| cl.refresh_support)
+            .unwrap_or(false);
+        self.state.set_code_lens_refresh_support(lens_refresh);
 
         let root_uri = params
             .workspace_folders
@@ -112,6 +121,9 @@ impl LanguageServer for Backend {
                 inlay_hint_provider: Some(OneOf::Right(InlayHintServerCapabilities::Options(
                     InlayHintOptions::default(),
                 ))),
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: Some(true),
+                }),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: pybabel::COMMANDS.iter().map(|s| s.to_string()).collect(),
@@ -573,6 +585,64 @@ impl LanguageServer for Backend {
         }
 
         Ok(None)
+    }
+
+    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        let uri = params.text_document.uri;
+        let Some(doc) = self.state.documents.get(&uri) else {
+            return Ok(None);
+        };
+        let text = doc.rope.to_string();
+        drop(doc);
+
+        let lenses = if is_catalog_uri(&uri) {
+            let Some(path) = uri.to_file_path() else { return Ok(None) };
+            let index = self.state.catalog_index.read().await;
+            let entries = index.entries_for_file(&path);
+            code_lens::code_lenses_catalog(&text, &entries)
+        } else {
+            let config = self.state.config.read().await;
+            let calls = extract_calls(&text, &uri, &config);
+            drop(config);
+            code_lens::code_lenses_source(&calls)
+        };
+
+        Ok(if lenses.is_empty() { None } else { Some(lenses) })
+    }
+
+    async fn code_lens_resolve(&self, lens: CodeLens) -> Result<CodeLens> {
+        let Some(ref data_val) = lens.data else {
+            return Ok(lens);
+        };
+        let Ok(data) = serde_json::from_value::<code_lens::LensData>(data_val.clone()) else {
+            return Ok(lens);
+        };
+
+        let index = self.state.catalog_index.read().await;
+
+        let all_source_calls = if matches!(data.kind, code_lens::LensKind::Source) {
+            let open_docs: Vec<(Uri, String)> = self
+                .state
+                .documents
+                .iter()
+                .filter_map(|entry| {
+                    let uri = entry.key().clone();
+                    if is_catalog_uri(&uri) {
+                        return None;
+                    }
+                    Some((uri, entry.value().rope.to_string()))
+                })
+                .collect();
+            let config = self.state.config.read().await;
+            open_docs
+                .iter()
+                .flat_map(|(uri, text)| extract_calls(text, uri, &config))
+                .collect()
+        } else {
+            vec![]
+        };
+
+        Ok(code_lens::resolve_lens(lens, &index, &all_source_calls))
     }
 
     async fn prepare_rename(
@@ -1047,6 +1117,11 @@ async fn publish_diagnostics_after_rebuild(state: &Arc<WorkspaceState>, client: 
     // REQ-HINT-05: tell the client to re-request inlay hints for all open files.
     if state.inlay_hint_refresh_support() {
         let _ = client.inlay_hint_refresh().await;
+    }
+
+    // REQ-LENS-07: tell the client to re-request code lenses after a catalog rebuild.
+    if state.code_lens_refresh_support() {
+        let _ = client.code_lens_refresh().await;
     }
 }
 
