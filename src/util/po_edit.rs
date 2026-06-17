@@ -1,3 +1,5 @@
+use std::cmp::Reverse;
+
 use tower_lsp_server::ls_types::{Position, Range, TextEdit};
 
 /// Positional span for one non-obsolete PO entry.
@@ -205,7 +207,7 @@ pub fn apply_text_edits(content: &str, edits: &[TextEdit]) -> String {
         .collect();
 
     // Apply from the bottom of the file upward so earlier byte offsets stay valid.
-    byte_edits.sort_by(|a, b| b.0.cmp(&a.0));
+    byte_edits.sort_by_key(|e| Reverse(e.0));
 
     let mut result = content.to_string();
     for (start, end, new_text) in byte_edits {

@@ -228,7 +228,7 @@ fn string_prefix(
     // prefix, which would corrupt match results.
     let raw_content = &after_prefix[quote_byte_len..];
     let content = raw_content
-        .split(|c| c == '"' || c == '\'')
+        .split(['"', '\''])
         .next()
         .unwrap_or(raw_content)
         .to_string();

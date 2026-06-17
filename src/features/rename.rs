@@ -117,7 +117,7 @@ pub fn build_rename_edit(
 
     // ── Catalog edits (REQ-RNM-03) ───────────────────────────────────────────
 
-    let mut catalog_entries: Vec<&CatalogEntry> = index.lookup(key).into_iter().collect();
+    let mut catalog_entries: Vec<&CatalogEntry> = index.lookup(key).iter().collect();
     if let Some(pot) = index.lookup_pot(key) {
         catalog_entries.push(pot);
     }

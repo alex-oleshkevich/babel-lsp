@@ -738,7 +738,7 @@ impl LanguageServer for Backend {
 
         // Collect buffer content for every catalog file that touches the key.
         let catalog_entries: Vec<_> = {
-            let mut v: Vec<_> = index.lookup(&key).into_iter().cloned().collect();
+            let mut v: Vec<_> = index.lookup(&key).to_vec();
             if let Some(pot) = index.lookup_pot(&key) {
                 v.push(pot.clone());
             }
