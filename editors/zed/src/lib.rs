@@ -17,7 +17,7 @@ impl zed::Extension for BabelExtension {
             .ok_or_else(|| "babel-lsp not found in PATH. Install with: cargo install babel-lsp".to_string())?;
         Ok(zed::Command {
             command: binary,
-            args: vec!["lsp".into(), "--stdio".into()],
+            args: vec!["lsp".into()],
             env: worktree.shell_env(),
         })
     }
