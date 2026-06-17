@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn hover_catalog_multiline_msgid_matches_continuation_lines() {
-        let index = CatalogIndex::build(vec![entry("de", "Checkout", "Kasse")]);
+        let _index = CatalogIndex::build(vec![entry("de", "Checkout", "Kasse")]);
         // Simulate an entry whose msgid spans lines 5-7 (1-based).
         let multiline_entry = CatalogEntry {
             locale: "de".into(),
