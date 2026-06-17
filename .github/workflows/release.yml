@@ -13,9 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Tag matches Cargo.toml
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          ref="${{ github.event.inputs.tag || github.ref_name }}"
+          tag="${ref#v}"
           crate=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[0].version')
           test "$tag" = "$crate" || {
