@@ -351,14 +351,9 @@ impl LanguageServer for Backend {
                 .collect();
             let jinja_exts: Vec<String> = config.jinja_extensions.clone();
             let root = root.clone();
-            let extra = config
-                .extra_keywords
-                .iter()
-                .filter_map(|kw| {
-                    crate::extract::types::TranslationFunc::from_name(kw)
-                        .map(|f| (kw.clone(), f))
-                })
-                .collect::<std::collections::HashMap<_, _>>();
+            let extra = extra_keywords(&config);
+            // Release the config read lock before entering spawn_blocking so
+            // a concurrent config write (e.g. from initialized()) is never blocked.
             drop(config);
 
             // Walk on a blocking thread to avoid holding async executor.
@@ -881,10 +876,15 @@ impl LanguageServer for Backend {
             self.state.documents.insert(uri.clone(), doc);
         }
         // REQ-ARCH-10: every opened file receives an immediate publish.
+        // Note: the first call to did_open may use Config::default() if the
+        // initialized() workspace scan has not finished yet. Diagnostics will be
+        // corrected once the scan completes and triggers a rebuild.
         let config = self.state.config.read().await;
         let index = self.state.catalog_index.read().await;
         let diags = if is_catalog_uri(&uri) {
-            let path = uri.to_file_path().unwrap_or_default();
+            let Some(path) = uri.to_file_path() else {
+                return;
+            };
             let file_entries = index.entries_for_file(&path);
             diagnostics::check_catalog(&file_entries, &uri, &index)
         } else {
@@ -941,6 +941,10 @@ impl LanguageServer for Backend {
             drop(index);
             drop(config);
             self.client.publish_diagnostics(uri, filtered, None).await;
+        } else {
+            // URI is unknown (document was closed before this change arrived).
+            // Publish an empty list to clear any stale diagnostics.
+            self.client.publish_diagnostics(uri, vec![], None).await;
         }
     }
 
@@ -984,6 +988,7 @@ impl LanguageServer for Backend {
         let _guard = lock.lock().await;
 
         self.state.documents.remove(&uri);
+        self.state.release_doc_lock(&uri);
 
         // Revert to disk: removing the buffer overlay means the next rebuild
         // will re-read the saved file instead.

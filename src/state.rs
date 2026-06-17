@@ -65,6 +65,12 @@ impl WorkspaceState {
             .clone()
     }
 
+    /// Remove the per-document lock entry for `uri`, preventing the map from
+    /// growing unbounded as documents are opened and closed.
+    pub fn release_doc_lock(&self, uri: &Uri) {
+        self.doc_locks.remove(uri);
+    }
+
     pub fn set_utf8_encoding(&self, utf8: bool) {
         self.utf8_encoding.store(utf8, Ordering::Relaxed);
     }

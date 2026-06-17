@@ -42,7 +42,6 @@ pub struct Config {
     pub jinja_extensions: Vec<String>,
     pub detect_hardcoded_strings: bool,
     pub inlay_hint_locale: Option<String>,
-    pub position_encoding: String,
     pub diagnostics: DiagnosticsConfig,
     pub unchanged: UnchangedConfig,
     pub pybabel_path: Option<PathBuf>,
@@ -62,7 +61,6 @@ impl Default for Config {
             ],
             detect_hardcoded_strings: false,
             inlay_hint_locale: None,
-            position_encoding: "utf-8".to_string(),
             diagnostics: DiagnosticsConfig::default(),
             unchanged: UnchangedConfig::default(),
             pybabel_path: None,
@@ -154,7 +152,6 @@ struct PartialConfig {
     jinja_extensions: Vec<String>,
     detect_hardcoded_strings: Option<bool>,
     inlay_hint_locale: Option<String>,
-    position_encoding: Option<String>,
     diagnostics: PartialDiagnosticsConfig,
     unchanged: PartialUnchangedConfig,
     pybabel_path: Option<PathBuf>,
@@ -175,7 +172,6 @@ impl PartialConfig {
             },
             detect_hardcoded_strings: self.detect_hardcoded_strings.unwrap_or(false),
             inlay_hint_locale: self.inlay_hint_locale,
-            position_encoding: self.position_encoding.unwrap_or(defaults.position_encoding),
             diagnostics: DiagnosticsConfig {
                 select: self
                     .diagnostics
@@ -214,9 +210,6 @@ fn merge(base: &mut PartialConfig, overlay: PartialConfig) {
     }
     if overlay.inlay_hint_locale.is_some() {
         base.inlay_hint_locale = overlay.inlay_hint_locale;
-    }
-    if overlay.position_encoding.is_some() {
-        base.position_encoding = overlay.position_encoding;
     }
     if overlay.diagnostics.select.is_some() {
         base.diagnostics.select = overlay.diagnostics.select;
@@ -350,7 +343,6 @@ mod tests {
     fn resolve_no_config_files_returns_defaults() {
         let dir = TempDir::new().unwrap();
         let cfg = resolve_config(dir.path());
-        assert_eq!(cfg.position_encoding, "utf-8");
         assert!(cfg.extra_keywords.is_empty());
         assert_eq!(cfg.diagnostics.select, vec!["all"]);
     }
