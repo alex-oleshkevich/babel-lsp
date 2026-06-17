@@ -249,6 +249,8 @@ fn extract_trans(node: Node, source: &[u8]) -> Option<TranslationCall> {
 /// Reconstruct the message body from `text` and `print` nodes inside a trans block.
 ///
 /// `{{ count }}` expressions are normalized to `%(count)s` per the Babel convention.
+/// Leading/trailing whitespace is stripped and internal whitespace runs are collapsed
+/// to a single space, matching Babel's own trans-block extraction behaviour.
 fn build_trans_body(nodes: &[Node], source: &[u8]) -> String {
     let mut out = String::new();
     for node in nodes {
@@ -262,7 +264,8 @@ fn build_trans_body(nodes: &[Node], source: &[u8]) -> String {
             _ => {}
         }
     }
-    out
+    // Normalize whitespace: strip leading/trailing, collapse internal runs.
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Convert `{{ name }}` to `%(name)s` for the msgid body.
@@ -484,6 +487,34 @@ mod tests {
         let src = "{% unknown_tag %}\n{% trans %}Valid{% endtrans %}";
         let calls = ex(src);
         assert!(calls.iter().any(|c| c.msgid.as_deref() == Some("Valid")));
+    }
+
+    // babel-lsp-71h — trans block body whitespace normalization
+
+    #[test]
+    fn trans_body_leading_trailing_whitespace_stripped() {
+        let calls = ex("{% trans %}  Hello world  {% endtrans %}");
+        assert_eq!(calls[0].msgid.as_deref(), Some("Hello world"));
+    }
+
+    #[test]
+    fn trans_body_internal_whitespace_collapsed() {
+        let calls = ex("{% trans %}Hello   world{% endtrans %}");
+        assert_eq!(calls[0].msgid.as_deref(), Some("Hello world"));
+    }
+
+    #[test]
+    fn trans_body_multiline_whitespace_collapsed() {
+        let calls = ex("{% trans %}\n  Hello\n  world\n{% endtrans %}");
+        assert_eq!(calls[0].msgid.as_deref(), Some("Hello world"));
+    }
+
+    // babel-lsp-b4u — trans placeholder substitution
+
+    #[test]
+    fn trans_placeholder_substituted_in_body() {
+        let calls = ex("{% trans name=user.name %}Hello {{ name }}{% endtrans %}");
+        assert_eq!(calls[0].msgid.as_deref(), Some("Hello %(name)s"));
     }
 
     // Extra_keywords

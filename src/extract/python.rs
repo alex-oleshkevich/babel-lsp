@@ -293,6 +293,30 @@ fn unescape_python(s: &str) -> String {
             Some('\'') => out.push('\''),
             Some('\\') => out.push('\\'),
             Some('0') => out.push('\0'),
+            // Line continuation: backslash followed by a newline — remove both
+            // and skip any leading whitespace on the continuation line.
+            Some('\n') => {
+                while let Some(&next) = chars.as_str().as_bytes().first() {
+                    if next == b' ' || next == b'\t' {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            Some('\r') => {
+                // Handle \r\n line endings for line continuation.
+                if chars.as_str().starts_with('\n') {
+                    chars.next();
+                }
+                while let Some(&next) = chars.as_str().as_bytes().first() {
+                    if next == b' ' || next == b'\t' {
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
             Some(c) => {
                 out.push('\\');
                 out.push(c);
@@ -584,6 +608,22 @@ mod tests {
     fn unescape_tab_in_string() {
         let calls = ex(r#"_("Hello\tWorld")"#);
         assert_eq!(calls[0].msgid.as_deref(), Some("Hello\tWorld"));
+    }
+
+    // babel-lsp-cqd — backslash-newline line continuation inside string literals
+
+    #[test]
+    fn line_continuation_in_string_removed() {
+        // "Hello \<newline>world" → "Hello world"
+        let calls = ex("_(\"Hello \\\nworld\")");
+        assert_eq!(calls[0].msgid.as_deref(), Some("Hello world"));
+    }
+
+    #[test]
+    fn line_continuation_strips_leading_whitespace_on_next_line() {
+        // "Hello \<newline>    world" → "Hello world" (leading spaces on continuation removed)
+        let calls = ex("_(\"Hello \\\n    world\")");
+        assert_eq!(calls[0].msgid.as_deref(), Some("Hello world"));
     }
 
     // Multiple calls in one file
