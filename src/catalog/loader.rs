@@ -352,8 +352,8 @@ fn extract_raw_header_msgstr(content: &str) -> Option<String> {
         }
 
         // After `msgid ""`, expect `msgstr`
-        if trimmed.starts_with("msgstr") {
-            let rest = trimmed["msgstr".len()..].trim_start();
+        if let Some(rest) = trimmed.strip_prefix("msgstr") {
+            let rest = rest.trim_start();
             let mut msgstr = read_quoted_first(rest);
             while matches!(lines.peek(), Some(l) if l.trim_start().starts_with('"')) {
                 msgstr.push_str(&read_quoted_first(lines.next().unwrap().trim_start()));
@@ -426,10 +426,13 @@ fn scan_duplicate_msgids(content: &str) -> HashMap<CatalogKey, u32> {
                 msgid,
                 msgctxt: pending_ctxt.take(),
             };
-            if first_seen.contains_key(&key) {
-                duplicates.entry(key).or_insert(msgid_line);
-            } else {
-                first_seen.insert(key, msgid_line);
+            match first_seen.entry(key.clone()) {
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    duplicates.entry(key).or_insert(msgid_line);
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(msgid_line);
+                }
             }
         }
     }

@@ -408,7 +408,7 @@ impl LanguageServer for Backend {
         let config = self.state.config.read().await;
         let index = self.state.catalog_index.read().await;
         let locale = config.inlay_hint_locale.clone().or_else(|| {
-            let mut locales: Vec<String> = index.all_locales().into_iter().cloned().collect();
+            let mut locales: Vec<String> = index.all_locales().iter().cloned().collect();
             locales.sort();
             locales.into_iter().next()
         });

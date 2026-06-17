@@ -2,6 +2,11 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0)"
+        required: true
 
 jobs:
   version-check:
@@ -78,7 +83,6 @@ jobs:
 
   publish-pypi:
     needs: version-check
-    if: ${{ secrets.PYPI_TOKEN != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -91,21 +95,24 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: PyO3/maturin-action@v1
+      - name: Publish to PyPI
+        uses: PyO3/maturin-action@v1
+        if: env.PYPI_TOKEN != ''
         with:
           command: publish
           target: ${{ matrix.target }}
           args: --no-sdist --skip-existing
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
   publish-aur:
     needs: release
-    if: ${{ secrets.AUR_SSH_KEY != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Publish to AUR
+        if: env.AUR_SSH_KEY != ''
         env:
           AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
           GH_REPO: ${{ github.repository }}
@@ -113,7 +120,6 @@ jobs:
         run: |
           VERSION="${GH_TAG#v}"
 
-          # Compute per-arch checksums from the release artifacts
           CHECKSUM_X86=$(curl -sL \
             "https://github.com/${GH_REPO}/releases/download/${GH_TAG}/babel-lsp-linux-x86_64" \
             | sha256sum | cut -d' ' -f1)
@@ -126,7 +132,6 @@ jobs:
           chmod 600 ~/.ssh/aur_rsa
           ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts
 
-          # Clone existing AUR package, or init a fresh repo if first submission
           if git clone -c core.sshCommand="ssh -i ~/.ssh/aur_rsa" \
               ssh://aur@aur.archlinux.org/babel-lsp.git /tmp/aur; then
             echo "Updating existing AUR package"
@@ -137,7 +142,6 @@ jobs:
             git -C /tmp/aur remote add origin ssh://aur@aur.archlinux.org/babel-lsp.git
           fi
 
-          # Write PKGBUILD from template in repo, substituting version + checksums
           sed \
             -e "s/^pkgver=.*/pkgver=${VERSION}/" \
             -e "s/^pkgrel=.*/pkgrel=1/" \
@@ -145,12 +149,8 @@ jobs:
             -e "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('${CHECKSUM_ARM}')/" \
             pkg/aur/PKGBUILD > /tmp/aur/PKGBUILD
 
-          # Regenerate .SRCINFO
           docker run --rm -v /tmp/aur:/pkg archlinux:base-devel \
-            bash -c "cd /pkg && makepkg --printsrcinfo > .SRCINFO" || \
-          (cd /tmp/aur && \
-            sed "s/^pkgver=.*/pkgver = ${VERSION}/" pkg/aur/.SRCINFO 2>/dev/null \
-            > .SRCINFO || true)
+            bash -c "cd /pkg && makepkg --printsrcinfo > .SRCINFO" 2>/dev/null || true
 
           cd /tmp/aur
           git config user.email "ci@babel-lsp.dev"
@@ -162,10 +162,10 @@ jobs:
 
   publish-homebrew:
     needs: release
-    if: ${{ secrets.HOMEBREW_GITHUB_TOKEN != '' }}
     runs-on: macos-latest
     steps:
       - name: Bump Homebrew formula
+        if: env.HOMEBREW_GITHUB_TOKEN != ''
         env:
           HOMEBREW_GITHUB_TOKEN: ${{ secrets.HOMEBREW_GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
