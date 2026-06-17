@@ -1,10 +1,10 @@
-id = "babel"
-name = "babel"
+id = "babel-lsp"
+name = "Babel LSP"
 version = "0.1.0"
 schema_version = 1
-authors = ["Babel LSP Contributors"]
-description = "LSP-only Zed extension that starts babel-lsp"
-repository = "https://github.com/your-org/babel-lsp"
+authors = ["Alex Oleshkevich <techsupport@investerra.ch>"]
+description = "Language server for Python Babel i18n: diagnostics, completion, and hover for .po/.pot catalogs"
+repository = "https://github.com/alex-oleshkevich/babel-lsp"
 
 [language_servers.babel_lsp]
 languages = ["Python", "PO"]
