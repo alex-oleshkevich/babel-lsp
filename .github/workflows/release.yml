@@ -17,7 +17,8 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Tag matches Cargo.toml
         run: |
-          ref="${{ github.event.inputs.tag || github.ref_name }}"
+          dispatch_tag="${{ github.event.inputs.tag }}"
+          ref="${dispatch_tag:-$GITHUB_REF_NAME}"
           tag="${ref#v}"
           crate=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[0].version')
