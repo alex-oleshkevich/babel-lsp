@@ -966,8 +966,7 @@ fn extract_urls(s: &str) -> Vec<String> {
                 .unwrap_or(rest.len());
             let raw = &rest[..end];
             // Strip trailing ASCII punctuation that commonly appears in prose
-            let trimmed =
-                raw.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+            let trimmed = raw.trim_end_matches(['.', ',', ';', ':', '!', '?']);
             urls.push(trimmed.to_string());
             idx += end;
         } else {
