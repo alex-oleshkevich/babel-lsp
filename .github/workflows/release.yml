@@ -101,7 +101,7 @@ jobs:
       - name: Publish to AUR
         if: env.AUR_SSH_KEY != ''
         env:
-          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           GH_REPO: ${{ github.repository }}
           GH_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
