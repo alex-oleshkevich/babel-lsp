@@ -14,24 +14,9 @@ impl zed::Extension for BabelExtension {
     ) -> Result<zed::Command> {
         let env = worktree.shell_env();
 
-        // worktree.which uses the worktree's captured env; on a GUI-launched Zed
-        // that env may lack PATH, so fall back to well-known install locations.
-        let binary = worktree.which("babel-lsp").or_else(|| {
-            let home = std::env::var("HOME").ok()?;
-            let root = worktree.root_path();
-            [
-                format!("{root}/.venv/bin/babel-lsp"),
-                format!("{root}/venv/bin/babel-lsp"),
-                format!("{home}/.local/bin/babel-lsp"),
-                format!("{home}/.cargo/bin/babel-lsp"),
-            ]
-            .into_iter()
-            .find(|p| std::path::Path::new(p).exists())
-        })
-        .ok_or_else(|| {
-            "babel-lsp not found. Install with: pip install babel-lsp or cargo install babel-lsp"
-                .to_string()
-        })?;
+        let binary = worktree
+            .which("babel-lsp")
+            .ok_or_else(|| "babel-lsp not found in PATH".to_string())?;
 
         Ok(zed::Command {
             command: binary,

@@ -1,31 +1,5 @@
-const PYPROJECT: &str = include_str!("../pyproject.toml");
 const RELEASE_YML: &str = include_str!("../.github/workflows/release.yml");
 const PKG_SCRIPT: &str = include_str!("../scripts/package-zed-extension.sh");
-
-// ── pyproject.toml ────────────────────────────────────────────────────────────
-
-#[test]
-fn pyproject_is_valid_toml() {
-    toml::from_str::<toml::Value>(PYPROJECT).expect("pyproject.toml must be valid TOML");
-}
-
-#[test]
-fn pyproject_uses_maturin_build_backend() {
-    let config: toml::Value = toml::from_str(PYPROJECT).unwrap();
-    assert_eq!(
-        config["build-system"]["build-backend"].as_str().unwrap(),
-        "maturin"
-    );
-}
-
-#[test]
-fn pyproject_maturin_bindings_is_bin() {
-    let config: toml::Value = toml::from_str(PYPROJECT).unwrap();
-    assert_eq!(
-        config["tool"]["maturin"]["bindings"].as_str().unwrap(),
-        "bin"
-    );
-}
 
 // ── release.yml ───────────────────────────────────────────────────────────────
 
@@ -88,18 +62,6 @@ fn release_yml_packages_zed_extension() {
     assert!(
         RELEASE_YML.contains("package-zed-extension.sh"),
         "release job must package the Zed extension"
-    );
-}
-
-#[test]
-fn release_yml_publishes_pypi_wheel() {
-    assert!(
-        RELEASE_YML.contains("maturin-action"),
-        "must publish PyPI wheel via maturin"
-    );
-    assert!(
-        RELEASE_YML.contains("MATURIN_PYPI_TOKEN"),
-        "must use PYPI_TOKEN secret"
     );
 }
 
