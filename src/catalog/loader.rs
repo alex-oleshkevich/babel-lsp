@@ -231,24 +231,21 @@ fn parse_catalog(
     // parse_po_str had to patch a minimal header in (because the file was
     // headerless), we must NOT emit a synthetic header entry, otherwise
     // po/header-missing would never fire for headerless catalogs.
-    if raw_content_has_header(content) {
-        let header_msgstr = build_header_msgstr(&catalog.metadata);
-        if !header_msgstr.is_empty() {
-            entries.push(CatalogEntry {
-                locale: locale.to_string(),
-                domain: domain.to_string(),
-                msgid: String::new(),
-                msgctxt: None,
-                msgid_plural: None,
-                msgstr: vec![header_msgstr],
-                flags: EntryFlags {
-                    fuzzy: false,
-                    obsolete: false,
-                },
-                file_path: original_path.to_path_buf(),
-                line: 1,
-            });
-        }
+    if let Some(header_msgstr) = extract_raw_header_msgstr(content) {
+        entries.push(CatalogEntry {
+            locale: locale.to_string(),
+            domain: domain.to_string(),
+            msgid: String::new(),
+            msgctxt: None,
+            msgid_plural: None,
+            msgstr: vec![header_msgstr],
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
+            file_path: original_path.to_path_buf(),
+            line: 1,
+        });
     }
 
     // Detect duplicate msgids using a raw text scan.  polib deduplicates via
@@ -325,52 +322,50 @@ fn parse_catalog(
     Ok(entries)
 }
 
-/// Return true if the raw PO content contains a header entry (`msgid ""`).
+/// Extract the msgstr of the header entry (`msgid ""`) directly from raw PO content.
 ///
-/// A header is present when the file opens with `msgid ""` (possibly preceded
-/// by comment lines) followed by a non-empty `msgstr`.  We detect this with a
-/// simple scan rather than a full parse so we can distinguish a genuine header
-/// from a file that was patched by parse_po_str.
-fn raw_content_has_header(content: &str) -> bool {
-    let mut saw_empty_msgid = false;
-    for line in content.lines() {
+/// Returns `None` when no header is present so that `check_catalog` fires
+/// `po/header-missing`.  Reads the actual raw text rather than reconstructing
+/// from polib metadata — this preserves absent fields (e.g. missing
+/// `Plural-Forms`) so the check can distinguish "lacks Content-Type" from
+/// "lacks Plural-Forms" correctly.
+fn extract_raw_header_msgstr(content: &str) -> Option<String> {
+    let mut lines = content.lines().peekable();
+    let mut saw_header_msgid = false;
+
+    while let Some(line) = lines.next() {
         let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            // If we already committed to a non-header first entry, stop.
-            if saw_empty_msgid {
-                break;
+
+        if !saw_header_msgid {
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if !trimmed.starts_with("msgid \"\"") {
+                return None; // real entry appears before any header
+            }
+            saw_header_msgid = true;
+            // consume any (unusual) multi-line continuation of the empty msgid
+            while matches!(lines.peek(), Some(l) if l.trim_start().starts_with('"')) {
+                lines.next();
             }
             continue;
         }
-        if trimmed == "msgid \"\"" || trimmed.starts_with("msgid \"\"") {
-            saw_empty_msgid = true;
-            continue;
-        }
-        if saw_empty_msgid && trimmed.starts_with("msgstr") {
-            // The empty msgid is followed by msgstr — this is the header.
-            return true;
-        }
-        // Non-comment, non-empty-msgid line before we saw the header — no header.
-        if !saw_empty_msgid {
-            return false;
-        }
-    }
-    false
-}
 
-/// Reconstruct the header msgstr from polib's parsed metadata.
-///
-/// check_catalog calls parse_nplurals() on the concatenated msgstr of the
-/// header entry.  We need to emit the fields it looks for.
-fn build_header_msgstr(metadata: &polib::metadata::CatalogMetadata) -> String {
-    let mut parts = Vec::new();
-    if !metadata.content_type.is_empty() {
-        parts.push(format!("Content-Type: {}\n", metadata.content_type));
+        // After `msgid ""`, expect `msgstr`
+        if trimmed.starts_with("msgstr") {
+            let rest = trimmed["msgstr".len()..].trim_start();
+            let mut msgstr = read_quoted_first(rest);
+            while matches!(lines.peek(), Some(l) if l.trim_start().starts_with('"')) {
+                msgstr.push_str(&read_quoted_first(lines.next().unwrap().trim_start()));
+            }
+            return if msgstr.is_empty() { None } else { Some(msgstr) };
+        }
+
+        if !trimmed.is_empty() && !trimmed.starts_with('#') {
+            return None;
+        }
     }
-    let plural_str = metadata.plural_rules.dump();
-    // Always include Plural-Forms; check_catalog uses it for po/plural-count.
-    parts.push(format!("Plural-Forms: {}\n", plural_str));
-    parts.concat()
+    None
 }
 
 /// Scan raw PO content and return a map of keys whose msgid appears more than
@@ -427,7 +422,7 @@ fn scan_duplicate_msgids(content: &str) -> HashMap<CatalogKey, u32> {
                 msgid,
                 msgctxt: pending_ctxt.take(),
             };
-            if let Some(_first_line) = first_seen.get(&key) {
+            if first_seen.contains_key(&key) {
                 duplicates.entry(key).or_insert(msgid_line);
             } else {
                 first_seen.insert(key, msgid_line);
