@@ -3,6 +3,13 @@ name = "babel-lsp"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
+description = "Language server for Python Babel i18n (.po/.pot catalog diagnostics, completion, hover, and more)"
+license = "MIT"
+repository = "https://github.com/alex-oleshkevich/babel-lsp"
+homepage = "https://github.com/alex-oleshkevich/babel-lsp"
+keywords = ["lsp", "i18n", "babel", "gettext", "python"]
+categories = ["development-tools", "internationalization"]
+authors = ["Alex Oleshkevich <techsupport@investerra.ch>"]
 
 [dependencies]
 tower-lsp-server = "0.23"

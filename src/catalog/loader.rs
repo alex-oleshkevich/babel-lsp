@@ -358,7 +358,11 @@ fn extract_raw_header_msgstr(content: &str) -> Option<String> {
             while matches!(lines.peek(), Some(l) if l.trim_start().starts_with('"')) {
                 msgstr.push_str(&read_quoted_first(lines.next().unwrap().trim_start()));
             }
-            return if msgstr.is_empty() { None } else { Some(msgstr) };
+            return if msgstr.is_empty() {
+                None
+            } else {
+                Some(msgstr)
+            };
         }
 
         if !trimmed.is_empty() && !trimmed.starts_with('#') {

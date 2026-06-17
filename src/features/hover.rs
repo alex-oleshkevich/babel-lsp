@@ -107,10 +107,20 @@ fn render_card(
 /// REQ-HOV-03: returns the translation cell for one entry.
 fn entry_translation(entry: &CatalogEntry) -> String {
     if entry.flags.fuzzy {
-        let t = entry.msgstr.iter().find(|s| !s.is_empty()).map(String::as_str).unwrap_or("—");
+        let t = entry
+            .msgstr
+            .iter()
+            .find(|s| !s.is_empty())
+            .map(String::as_str)
+            .unwrap_or("—");
         format!("⚠ {t}")
     } else {
-        entry.msgstr.iter().find(|s| !s.is_empty()).cloned().unwrap_or_else(|| "—".to_string())
+        entry
+            .msgstr
+            .iter()
+            .find(|s| !s.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "—".to_string())
     }
 }
 
@@ -273,13 +283,19 @@ mod tests {
         let h = hover_at(r#"_("Save")"#, 0, 4, &index).unwrap();
         let text = card_text(&h);
         assert!(text.contains("⚠"), "warning prefix missing for fuzzy entry");
-        assert!(!text.contains("fuzzy"), "status word 'fuzzy' should be absent");
+        assert!(
+            !text.contains("fuzzy"),
+            "status word 'fuzzy' should be absent"
+        );
 
         // Checkout: de is translated, fr is missing (empty msgstr) — should show "—".
         let h = hover_at(r#"_("Checkout")"#, 0, 5, &index).unwrap();
         let text = card_text(&h);
         assert!(!text.contains("ok"), "status word 'ok' should be absent");
-        assert!(!text.contains("missing"), "status word 'missing' should be absent");
+        assert!(
+            !text.contains("missing"),
+            "status word 'missing' should be absent"
+        );
         assert!(
             text.contains("—"),
             "em-dash for missing translation missing"

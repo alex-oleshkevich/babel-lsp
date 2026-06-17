@@ -107,7 +107,9 @@ impl CatalogIndex {
             if entry.msgid.is_empty() {
                 // Catalog header entry — store separately so all_msgids() does
                 // not expose the empty key and proj/unused-id never fires on it.
-                header_entries.entry(entry.file_path.clone()).or_insert(entry);
+                header_entries
+                    .entry(entry.file_path.clone())
+                    .or_insert(entry);
             } else if entry.locale.is_empty() {
                 // .pot template — include domain in key to avoid cross-domain collisions
                 pot_entries.insert((entry.domain.clone(), key), entry);
