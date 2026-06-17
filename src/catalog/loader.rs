@@ -167,7 +167,7 @@ pub fn load_po_file(path: &Path, locale: &str, domain: &str) -> Result<Vec<Catal
     let content = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let line_map = PoLineMap::build(&content);
     let catalog = parse_po_str(&content, path)?;
-    parse_catalog(catalog, &line_map, path, locale, domain)
+    parse_catalog(catalog, &line_map, &content, path, locale, domain)
 }
 
 /// Parse `.po` content from an in-memory string into catalog entries.
@@ -183,7 +183,7 @@ pub fn load_po_from_str(
 ) -> Result<Vec<CatalogEntry>, String> {
     let line_map = PoLineMap::build(content);
     let catalog = parse_po_str(content, original_path)?;
-    parse_catalog(catalog, &line_map, original_path, locale, domain)
+    parse_catalog(catalog, &line_map, content, original_path, locale, domain)
 }
 
 /// Parse PO content from a string, tolerating a missing or ill-formed header by
@@ -208,14 +208,55 @@ fn parse_po_str(content: &str, original_path: &Path) -> Result<polib::catalog::C
 }
 
 /// Internal: convert a parsed polib `Catalog` into `CatalogEntry` values.
+///
+/// The `content` parameter is the raw PO text, used to recover information
+/// that polib discards: duplicate msgids, obsolete entries, and the header.
 fn parse_catalog(
     catalog: polib::catalog::Catalog,
     line_map: &PoLineMap,
+    content: &str,
     original_path: &Path,
     locale: &str,
     domain: &str,
 ) -> Result<Vec<CatalogEntry>, String> {
     let mut entries = vec![];
+
+    // Synthesize a header CatalogEntry from the parsed metadata so that
+    // check_catalog can find the nplurals declaration (po/plural-count) and the
+    // Content-Type charset (po/header-missing).  polib stores metadata
+    // separately and never exposes it as a message, so we reconstruct the
+    // header msgstr from the metadata fields that check_catalog reads.
+    //
+    // Only synthesize the header if the original file actually had one — if
+    // parse_po_str had to patch a minimal header in (because the file was
+    // headerless), we must NOT emit a synthetic header entry, otherwise
+    // po/header-missing would never fire for headerless catalogs.
+    if raw_content_has_header(content) {
+        let header_msgstr = build_header_msgstr(&catalog.metadata);
+        if !header_msgstr.is_empty() {
+            entries.push(CatalogEntry {
+                locale: locale.to_string(),
+                domain: domain.to_string(),
+                msgid: String::new(),
+                msgctxt: None,
+                msgid_plural: None,
+                msgstr: vec![header_msgstr],
+                flags: EntryFlags {
+                    fuzzy: false,
+                    obsolete: false,
+                },
+                file_path: original_path.to_path_buf(),
+                line: 1,
+            });
+        }
+    }
+
+    // Detect duplicate msgids using a raw text scan.  polib deduplicates via
+    // append_or_update, so the catalog only holds the last occurrence.  We
+    // recover the first-seen line per key and flag any second occurrence as a
+    // duplicate entry with the same msgstr as the polib-surviving entry.
+    let dup_keys = scan_duplicate_msgids(content);
+
     for msg in catalog.messages() {
         let msgid = msg.msgid().to_string();
         if msgid.is_empty() {
@@ -243,10 +284,10 @@ fn parse_catalog(
         entries.push(CatalogEntry {
             locale: locale.to_string(),
             domain: domain.to_string(),
-            msgid,
-            msgctxt,
-            msgid_plural,
-            msgstr,
+            msgid: msgid.clone(),
+            msgctxt: msgctxt.clone(),
+            msgid_plural: msgid_plural.clone(),
+            msgstr: msgstr.clone(),
             flags: EntryFlags {
                 fuzzy: msg.is_fuzzy(),
                 obsolete: false,
@@ -254,8 +295,211 @@ fn parse_catalog(
             file_path: original_path.to_path_buf(),
             line,
         });
+
+        // If the key appears more than once in the raw text, inject a duplicate
+        // entry so that po/duplicate-id can fire on the second occurrence.
+        if let Some(&dup_line) = dup_keys.get(&key) {
+            if dup_line != line {
+                entries.push(CatalogEntry {
+                    locale: locale.to_string(),
+                    domain: domain.to_string(),
+                    msgid,
+                    msgctxt,
+                    msgid_plural,
+                    msgstr,
+                    flags: EntryFlags {
+                        fuzzy: msg.is_fuzzy(),
+                        obsolete: false,
+                    },
+                    file_path: original_path.to_path_buf(),
+                    line: dup_line,
+                });
+            }
+        }
     }
+
+    // Recover obsolete entries (#~ msgid) which polib silently drops.
+    let obsolete = scan_obsolete_entries(content, original_path, locale, domain);
+    entries.extend(obsolete);
+
     Ok(entries)
+}
+
+/// Return true if the raw PO content contains a header entry (`msgid ""`).
+///
+/// A header is present when the file opens with `msgid ""` (possibly preceded
+/// by comment lines) followed by a non-empty `msgstr`.  We detect this with a
+/// simple scan rather than a full parse so we can distinguish a genuine header
+/// from a file that was patched by parse_po_str.
+fn raw_content_has_header(content: &str) -> bool {
+    let mut saw_empty_msgid = false;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            // If we already committed to a non-header first entry, stop.
+            if saw_empty_msgid {
+                break;
+            }
+            continue;
+        }
+        if trimmed == "msgid \"\"" || trimmed.starts_with("msgid \"\"") {
+            saw_empty_msgid = true;
+            continue;
+        }
+        if saw_empty_msgid && trimmed.starts_with("msgstr") {
+            // The empty msgid is followed by msgstr — this is the header.
+            return true;
+        }
+        // Non-comment, non-empty-msgid line before we saw the header — no header.
+        if !saw_empty_msgid {
+            return false;
+        }
+    }
+    false
+}
+
+/// Reconstruct the header msgstr from polib's parsed metadata.
+///
+/// check_catalog calls parse_nplurals() on the concatenated msgstr of the
+/// header entry.  We need to emit the fields it looks for.
+fn build_header_msgstr(metadata: &polib::metadata::CatalogMetadata) -> String {
+    let mut parts = Vec::new();
+    if !metadata.content_type.is_empty() {
+        parts.push(format!("Content-Type: {}\n", metadata.content_type));
+    }
+    let plural_str = metadata.plural_rules.dump();
+    // Always include Plural-Forms; check_catalog uses it for po/plural-count.
+    parts.push(format!("Plural-Forms: {}\n", plural_str));
+    parts.concat()
+}
+
+/// Scan raw PO content and return a map of keys whose msgid appears more than
+/// once.  The value is the 1-based line of the *second* occurrence so that
+/// check_catalog can place the duplicate finding there.
+fn scan_duplicate_msgids(content: &str) -> HashMap<CatalogKey, u32> {
+    let mut first_seen: HashMap<CatalogKey, u32> = HashMap::new();
+    let mut duplicates: HashMap<CatalogKey, u32> = HashMap::new();
+
+    let mut iter = content.lines().enumerate().peekable();
+    let mut pending_ctxt: Option<String> = None;
+    let mut in_obsolete = false;
+
+    while let Some((i, line)) = iter.next() {
+        let lineno = (i + 1) as u32;
+        let trimmed = line.trim_start();
+
+        if trimmed.is_empty() {
+            pending_ctxt = None;
+            in_obsolete = false;
+            continue;
+        }
+
+        // Skip obsolete entries
+        if trimmed.starts_with("#~") {
+            in_obsolete = true;
+            continue;
+        }
+        if in_obsolete {
+            continue;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("msgctxt ") {
+            let mut val = read_quoted_first(rest);
+            while matches!(iter.peek(), Some((_, l)) if l.trim_start().starts_with('"')) {
+                val.push_str(&read_quoted_first(iter.next().unwrap().1.trim_start()));
+            }
+            pending_ctxt = if val.is_empty() { None } else { Some(val) };
+            continue;
+        }
+
+        if trimmed.starts_with("msgid ") && !trimmed.starts_with("msgid_plural") {
+            let rest = trimmed.trim_start_matches("msgid ").trim_start();
+            let msgid_line = lineno;
+            let mut msgid = read_quoted_first(rest);
+            while matches!(iter.peek(), Some((_, l)) if l.trim_start().starts_with('"')) {
+                msgid.push_str(&read_quoted_first(iter.next().unwrap().1.trim_start()));
+            }
+            if msgid.is_empty() {
+                pending_ctxt = None;
+                continue;
+            }
+            let key = CatalogKey {
+                msgid,
+                msgctxt: pending_ctxt.take(),
+            };
+            if let Some(_first_line) = first_seen.get(&key) {
+                duplicates.entry(key).or_insert(msgid_line);
+            } else {
+                first_seen.insert(key, msgid_line);
+            }
+        }
+    }
+
+    duplicates
+}
+
+/// Scan raw PO content for obsolete entries (`#~ msgid ...`) and return them
+/// as CatalogEntry values with `flags.obsolete = true`.
+///
+/// polib silently discards `#~` lines, so we recover them here.
+fn scan_obsolete_entries(
+    content: &str,
+    original_path: &Path,
+    locale: &str,
+    domain: &str,
+) -> Vec<CatalogEntry> {
+    let mut result = Vec::new();
+    let mut iter = content.lines().enumerate().peekable();
+
+    while let Some((i, line)) = iter.next() {
+        let lineno = (i + 1) as u32;
+        let trimmed = line.trim_start();
+
+        // Obsolete msgid line
+        let rest = if let Some(r) = trimmed.strip_prefix("#~ msgid ") {
+            r
+        } else if let Some(r) = trimmed.strip_prefix("#~msgid ") {
+            r
+        } else {
+            continue;
+        };
+
+        if rest.trim_start().starts_with("\"\"") {
+            continue; // skip the obsolete header sentinel
+        }
+
+        let mut msgid = read_quoted_first(rest.trim_start());
+        // Collect continuation lines (#~ "...")
+        while matches!(iter.peek(), Some((_, l)) if {
+            let t = l.trim_start();
+            t.starts_with("#~ \"") || t.starts_with("#~\"")
+        }) {
+            let cont = iter.next().unwrap().1.trim_start().to_string();
+            let cont = cont.trim_start_matches("#~").trim_start();
+            msgid.push_str(&read_quoted_first(cont));
+        }
+
+        if msgid.is_empty() {
+            continue;
+        }
+
+        result.push(CatalogEntry {
+            locale: locale.to_string(),
+            domain: domain.to_string(),
+            msgid,
+            msgctxt: None,
+            msgid_plural: None,
+            msgstr: vec![String::new()],
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: true,
+            },
+            file_path: original_path.to_path_buf(),
+            line: lineno,
+        });
+    }
+
+    result
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -513,8 +757,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_po(&dir, "de/LC_MESSAGES/messages.po", MINIMAL_PO);
         let entries = load_po_file(&path, "de", "messages").unwrap();
-        assert_eq!(entries.len(), 2);
-        assert!(entries.iter().all(|e| !e.msgid.is_empty()));
+        // MINIMAL_PO has 2 non-header msgids plus 1 synthesized header entry.
+        assert_eq!(entries.len(), 3);
+        // At least 2 entries have non-empty msgids (the real translations).
+        assert_eq!(entries.iter().filter(|e| !e.msgid.is_empty()).count(), 2);
     }
 
     #[test]
@@ -574,11 +820,12 @@ mod tests {
         );
         let path = Path::new("/locale/de/LC_MESSAGES/messages.po");
         let entries = load_po_from_str(content, path, "de", "messages").unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].msgid, "Buffer Entry");
-        assert_eq!(entries[0].locale, "de");
-        assert_eq!(entries[0].domain, "messages");
-        assert_eq!(entries[0].file_path, path);
+        // The synthesized header plus one real msgid.
+        assert_eq!(entries.len(), 2);
+        let entry = entries.iter().find(|e| e.msgid == "Buffer Entry").unwrap();
+        assert_eq!(entry.locale, "de");
+        assert_eq!(entry.domain, "messages");
+        assert_eq!(entry.file_path, path);
     }
 
     #[test]
@@ -593,8 +840,8 @@ mod tests {
         );
         let path = Path::new("/locale/de/LC_MESSAGES/messages.po");
         let entries = load_po_from_str(content, path, "de", "messages").unwrap();
-        assert_eq!(entries[0].msgid, "Alpha");
-        assert_eq!(entries[0].line, 5);
+        let alpha = entries.iter().find(|e| e.msgid == "Alpha").unwrap();
+        assert_eq!(alpha.line, 5);
     }
 
     #[test]

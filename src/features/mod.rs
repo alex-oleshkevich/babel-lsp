@@ -5,7 +5,6 @@ pub mod definition;
 pub mod diagnostics;
 pub mod document_link;
 pub mod document_symbol;
-pub mod hardcoded;
 pub mod hover;
 pub mod inlay_hint;
 pub mod pybabel;

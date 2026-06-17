@@ -40,7 +40,6 @@ pub struct Config {
     pub domains: Option<Vec<String>>,
     pub extra_keywords: Vec<String>,
     pub jinja_extensions: Vec<String>,
-    pub detect_hardcoded_strings: bool,
     pub inlay_hint_locale: Option<String>,
     pub diagnostics: DiagnosticsConfig,
     pub unchanged: UnchangedConfig,
@@ -59,7 +58,6 @@ impl Default for Config {
                 ".jinja2".to_string(),
                 ".j2".to_string(),
             ],
-            detect_hardcoded_strings: false,
             inlay_hint_locale: None,
             diagnostics: DiagnosticsConfig::default(),
             unchanged: UnchangedConfig::default(),
@@ -150,7 +148,6 @@ struct PartialConfig {
     domains: Option<Vec<String>>,
     extra_keywords: Vec<String>,
     jinja_extensions: Vec<String>,
-    detect_hardcoded_strings: Option<bool>,
     inlay_hint_locale: Option<String>,
     diagnostics: PartialDiagnosticsConfig,
     unchanged: PartialUnchangedConfig,
@@ -170,7 +167,6 @@ impl PartialConfig {
             } else {
                 self.jinja_extensions
             },
-            detect_hardcoded_strings: self.detect_hardcoded_strings.unwrap_or(false),
             inlay_hint_locale: self.inlay_hint_locale,
             diagnostics: DiagnosticsConfig {
                 select: self
@@ -204,9 +200,6 @@ fn merge(base: &mut PartialConfig, overlay: PartialConfig) {
     }
     if !overlay.jinja_extensions.is_empty() {
         base.jinja_extensions = overlay.jinja_extensions;
-    }
-    if overlay.detect_hardcoded_strings.is_some() {
-        base.detect_hardcoded_strings = overlay.detect_hardcoded_strings;
     }
     if overlay.inlay_hint_locale.is_some() {
         base.inlay_hint_locale = overlay.inlay_hint_locale;

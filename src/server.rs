@@ -16,7 +16,7 @@ use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_
 use crate::config::{Config, discover_locale_dirs, resolve_config};
 use crate::features::{
     code_action, code_lens, completion, definition, diagnostics, document_link, document_symbol,
-    hardcoded, hover, inlay_hint, pybabel, references, rename,
+    hover, inlay_hint, pybabel, references, rename,
 };
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
@@ -406,13 +406,19 @@ impl LanguageServer for Backend {
         drop(doc);
 
         let config = self.state.config.read().await;
-        let Some(locale) = config.inlay_hint_locale.clone() else {
+        let index = self.state.catalog_index.read().await;
+        let locale = config.inlay_hint_locale.clone()
+            .or_else(|| {
+                let mut locales: Vec<String> = index.all_locales().into_iter().cloned().collect();
+                locales.sort();
+                locales.into_iter().next()
+            });
+        let Some(locale) = locale else {
             return Ok(None);
         };
         let calls = extract_calls(&text, &uri, &config);
         drop(config);
 
-        let index = self.state.catalog_index.read().await;
         let hints = inlay_hint::inlay_hints(&calls, &index, Some(&locale), params.range);
         Ok(if hints.is_empty() { None } else { Some(hints) })
     }
@@ -455,98 +461,9 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri.clone();
         let is_catalog = is_catalog_uri(&uri);
         let is_config = is_config_uri(&uri);
-        let has_hardcoded_diag = params.context.diagnostics.iter().any(
-            |d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "msg/hardcoded-string"),
-        );
 
-        if !is_catalog && !is_config && !has_hardcoded_diag {
+        if !is_catalog && !is_config {
             return Ok(None);
-        }
-
-        // Handle hardcoded-string extract actions for Python source files.
-        // Placed before has_locale_dirs to avoid an unnecessary config read.
-        if has_hardcoded_diag && !is_catalog && !is_config {
-            let config = self.state.config.read().await;
-            if !config.detect_hardcoded_strings {
-                return Ok(None);
-            }
-            let keyword: String = config
-                .extra_keywords
-                .iter()
-                .find(|kw| {
-                    crate::extract::types::TranslationFunc::from_name(kw)
-                        .map(|f| !f.has_domain() && !f.has_context() && !f.has_plural())
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .unwrap_or_else(|| "_".to_string());
-            drop(config);
-
-            let source = {
-                let Some(doc) = self.state.documents.get(&uri) else {
-                    return Ok(None);
-                };
-                doc.rope.to_string()
-            };
-
-            let index = self.state.catalog_index.read().await;
-            let pot_path = index.pot_file_path().map(|p| p.to_path_buf());
-            let po_paths: Vec<PathBuf> = index
-                .po_file_paths()
-                .into_iter()
-                .map(|p| p.to_path_buf())
-                .collect();
-
-            let pot_info: Option<(Uri, String)> = pot_path.as_ref().and_then(|path| {
-                let pot_uri = Uri::from_file_path(path)?;
-                let content = self
-                    .state
-                    .documents
-                    .get(&pot_uri)
-                    .map(|d| d.rope.to_string())
-                    .or_else(|| std::fs::read_to_string(path).ok())?;
-                Some((pot_uri, content))
-            });
-
-            let locale_po_contents: Vec<(Uri, String)> = po_paths
-                .iter()
-                .filter_map(|path| {
-                    let po_uri = Uri::from_file_path(path)?;
-                    let content = self
-                        .state
-                        .documents
-                        .get(&po_uri)
-                        .map(|d| d.rope.to_string())
-                        .or_else(|| std::fs::read_to_string(path).ok())?;
-                    Some((po_uri, content))
-                })
-                .collect();
-
-            let locale_po_refs: Vec<(&Uri, &str)> = locale_po_contents
-                .iter()
-                .map(|(u, c)| (u, c.as_str()))
-                .collect();
-
-            let actions = hardcoded::code_actions_for_hardcoded(
-                &params.context.diagnostics,
-                &source,
-                &uri,
-                &keyword,
-                pot_info.as_ref().map(|(u, c)| (u, c.as_str())),
-                &index,
-                &locale_po_refs,
-            );
-            drop(index);
-
-            if actions.is_empty() {
-                return Ok(None);
-            }
-            return Ok(Some(
-                actions
-                    .into_iter()
-                    .map(CodeActionOrCommand::CodeAction)
-                    .collect(),
-            ));
         }
 
         let has_locale_dirs = {
@@ -925,16 +842,7 @@ impl LanguageServer for Backend {
             diagnostics::check_catalog(&file_entries, &uri, &index)
         } else {
             let calls = extract_calls(&params.text_document.text, &uri, &config);
-            let mut diags = diagnostics::check_source(&calls, &index);
-            if config.detect_hardcoded_strings {
-                let extra = extra_keywords(&config);
-                diags.extend(hardcoded::check_source(
-                    params.text_document.text.as_bytes(),
-                    &uri,
-                    &extra,
-                ));
-            }
-            diags
+            diagnostics::check_source(&calls, &index)
         };
         let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
         drop(index);
@@ -968,11 +876,7 @@ impl LanguageServer for Backend {
             let config = self.state.config.read().await;
             let index = self.state.catalog_index.read().await;
             let calls = extract_calls(&text, &uri, &config);
-            let mut diags = diagnostics::check_source(&calls, &index);
-            if config.detect_hardcoded_strings {
-                let extra = extra_keywords(&config);
-                diags.extend(hardcoded::check_source(text.as_bytes(), &uri, &extra));
-            }
+            let diags = diagnostics::check_source(&calls, &index);
             let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
             drop(index);
             drop(config);
@@ -1006,11 +910,7 @@ impl LanguageServer for Backend {
             let config = self.state.config.read().await;
             let index = self.state.catalog_index.read().await;
             let calls = extract_calls(&text, &uri, &config);
-            let mut diags = diagnostics::check_source(&calls, &index);
-            if config.detect_hardcoded_strings {
-                let extra = extra_keywords(&config);
-                diags.extend(hardcoded::check_source(text.as_bytes(), &uri, &extra));
-            }
+            let diags = diagnostics::check_source(&calls, &index);
             let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
             drop(index);
             drop(config);
@@ -1168,11 +1068,7 @@ async fn publish_diagnostics_after_rebuild(state: &Arc<WorkspaceState>, client: 
     // Source-side diagnostics: re-check all open source files.
     for (uri, text) in &open_sources {
         let calls = extract_calls(text, uri, &config);
-        let mut diags = diagnostics::check_source(&calls, &index);
-        if config.detect_hardcoded_strings {
-            let extra = extra_keywords(&config);
-            diags.extend(hardcoded::check_source(text.as_bytes(), uri, &extra));
-        }
+        let diags = diagnostics::check_source(&calls, &index);
         let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
         client
             .publish_diagnostics(uri.clone(), filtered, None)

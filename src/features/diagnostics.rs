@@ -14,7 +14,6 @@ pub const KNOWN_CODES: &[&str] = &[
     "msg/empty-id",
     "msg/format-before-call",
     "msg/fstring-in-call",
-    "msg/hardcoded-string",
     "msg/implicit-concat",
     "msg/missing-in-locale",
     "msg/non-constant-id",
@@ -322,8 +321,8 @@ pub fn check_catalog(
 
         let all_empty = entry.msgstr.iter().all(|s| s.is_empty());
 
-        // po/missing-translation
-        if all_empty && !entry.flags.fuzzy {
+        // po/missing-translation — skip .pot template entries (empty locale, empty msgstr by design)
+        if all_empty && !entry.flags.fuzzy && !entry.locale.is_empty() {
             diags.push(make_diag(
                 entry_range(entry),
                 "po/missing-translation",

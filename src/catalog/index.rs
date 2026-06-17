@@ -74,6 +74,10 @@ pub struct CatalogIndex {
     /// Keyed by (domain, CatalogKey) so that the same msgid in two different
     /// domains does not overwrite each other.
     pot_entries: HashMap<(String, CatalogKey), CatalogEntry>,
+    /// Header entries (msgid "") keyed by file path, kept separate so that
+    /// all_msgids() does not expose the empty key and proj/unused-id does not
+    /// fire on the catalog header.
+    header_entries: HashMap<PathBuf, CatalogEntry>,
     locales: BTreeSet<String>,
     locales_by_domain: HashMap<String, BTreeSet<String>>,
     domains: BTreeSet<String>,
@@ -85,6 +89,7 @@ impl CatalogIndex {
     pub fn build(all_entries: Vec<CatalogEntry>) -> Self {
         let mut entries: HashMap<CatalogKey, Vec<CatalogEntry>> = HashMap::new();
         let mut pot_entries: HashMap<(String, CatalogKey), CatalogEntry> = HashMap::new();
+        let mut header_entries: HashMap<PathBuf, CatalogEntry> = HashMap::new();
         let mut locales = BTreeSet::new();
         let mut locales_by_domain: HashMap<String, BTreeSet<String>> = HashMap::new();
         let mut domains = BTreeSet::new();
@@ -99,7 +104,11 @@ impl CatalogIndex {
             }
             domains.insert(entry.domain.clone());
             let key = entry.key();
-            if entry.locale.is_empty() {
+            if entry.msgid.is_empty() {
+                // Catalog header entry — store separately so all_msgids() does
+                // not expose the empty key and proj/unused-id never fires on it.
+                header_entries.entry(entry.file_path.clone()).or_insert(entry);
+            } else if entry.locale.is_empty() {
                 // .pot template — include domain in key to avoid cross-domain collisions
                 pot_entries.insert((entry.domain.clone(), key), entry);
             } else {
@@ -110,6 +119,7 @@ impl CatalogIndex {
         Self {
             entries,
             pot_entries,
+            header_entries,
             locales,
             locales_by_domain,
             domains,
@@ -177,12 +187,14 @@ impl CatalogIndex {
         missing.into_iter().collect()
     }
 
-    /// All entries that came from a specific catalog file.
+    /// All entries that came from a specific catalog file, including the header.
     pub fn entries_for_file(&self, path: &Path) -> Vec<&CatalogEntry> {
+        let header = self.header_entries.get(path).into_iter();
         self.entries
             .values()
             .flatten()
             .chain(self.pot_entries.values())
+            .chain(header)
             .filter(|e| e.file_path == path)
             .collect()
     }

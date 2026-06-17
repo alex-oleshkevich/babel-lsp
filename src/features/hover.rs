@@ -80,17 +80,17 @@ fn render_card(
         md.push_str("No translations found.");
     } else {
         // REQ-HOV-02/03: per-locale table sorted by locale then domain.
-        md.push_str("| Locale | Domain | Translation | Status |\n");
-        md.push_str("|--------|--------|-------------|--------|\n");
+        md.push_str("| Locale | Domain | Translation |\n");
+        md.push_str("|--------|--------|-------------|\n");
 
         let mut sorted: Vec<&CatalogEntry> = entries.iter().collect();
         sorted.sort_by(|a, b| a.locale.cmp(&b.locale).then(a.domain.cmp(&b.domain)));
 
         for entry in sorted {
-            let (translation, status) = entry_translation_and_status(entry);
+            let translation = entry_translation(entry);
             md.push_str(&format!(
-                "| {} | {} | {} | {} |\n",
-                entry.locale, entry.domain, translation, status
+                "| {} | {} | {} |\n",
+                entry.locale, entry.domain, translation
             ));
         }
     }
@@ -104,21 +104,13 @@ fn render_card(
     })
 }
 
-/// REQ-HOV-03: returns (translation_cell, status_label) for one entry.
-fn entry_translation_and_status(entry: &CatalogEntry) -> (String, &'static str) {
+/// REQ-HOV-03: returns the translation cell for one entry.
+fn entry_translation(entry: &CatalogEntry) -> String {
     if entry.flags.fuzzy {
-        let t = entry
-            .msgstr
-            .iter()
-            .find(|s| !s.is_empty())
-            .map(String::as_str)
-            .unwrap_or("—")
-            .to_string();
-        (t, "fuzzy")
-    } else if let Some(t) = entry.msgstr.iter().find(|s| !s.is_empty()) {
-        (t.clone(), "ok")
+        let t = entry.msgstr.iter().find(|s| !s.is_empty()).map(String::as_str).unwrap_or("—");
+        format!("⚠ {t}")
     } else {
-        ("—".to_string(), "missing")
+        entry.msgstr.iter().find(|s| !s.is_empty()).cloned().unwrap_or_else(|| "—".to_string())
     }
 }
 
@@ -253,9 +245,10 @@ mod tests {
         let h = hover_at(r#"_("Checkout")"#, 0, 5, &index).unwrap();
         let text = card_text(&h);
         assert!(
-            text.contains("| Locale | Domain | Translation | Status |"),
+            text.contains("| Locale | Domain | Translation |"),
             "table header missing"
         );
+        assert!(!text.contains("Status"), "Status column should be absent");
         assert!(text.contains("de"), "de row missing");
         assert!(text.contains("fr"), "fr row missing");
     }
@@ -274,18 +267,19 @@ mod tests {
     // ── REQ-HOV-03 ───────────────────────────────────────────────────────────
 
     #[test]
-    fn req_hov_03_status_is_ok_fuzzy_or_missing() {
+    fn req_hov_03_fuzzy_has_warning_prefix_and_missing_has_em_dash() {
         let index = shopfront_index();
-        // Save: de is fuzzy, no fr entry.
+        // Save: de is fuzzy — should have ⚠ prefix.
         let h = hover_at(r#"_("Save")"#, 0, 4, &index).unwrap();
         let text = card_text(&h);
-        assert!(text.contains("fuzzy"), "fuzzy status missing");
+        assert!(text.contains("⚠"), "warning prefix missing for fuzzy entry");
+        assert!(!text.contains("fuzzy"), "status word 'fuzzy' should be absent");
 
-        // Checkout: de is ok, fr is missing (empty msgstr).
+        // Checkout: de is translated, fr is missing (empty msgstr) — should show "—".
         let h = hover_at(r#"_("Checkout")"#, 0, 5, &index).unwrap();
         let text = card_text(&h);
-        assert!(text.contains("ok"), "ok status missing");
-        assert!(text.contains("missing"), "missing status missing");
+        assert!(!text.contains("ok"), "status word 'ok' should be absent");
+        assert!(!text.contains("missing"), "status word 'missing' should be absent");
         assert!(
             text.contains("—"),
             "em-dash for missing translation missing"
