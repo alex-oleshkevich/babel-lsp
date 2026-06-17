@@ -106,18 +106,17 @@ fn build_item(
 
     // REQ-CPL-06: multi-locale table when more than one entry exists.
     let documentation = if entries.len() > 1 {
-        let rows: String = entries
-            .iter()
-            .map(|e| {
-                let msgstr = e
-                    .msgstr
-                    .iter()
-                    .find(|s| !s.is_empty())
-                    .map(|s| s.as_str())
-                    .unwrap_or("_(untranslated)_");
-                format!("| {} | {} |\n", e.locale, msgstr)
-            })
-            .collect();
+        let rows: String = entries.iter().fold(String::new(), |mut s, e| {
+            use std::fmt::Write as _;
+            let msgstr = e
+                .msgstr
+                .iter()
+                .find(|s| !s.is_empty())
+                .map(|s| s.as_str())
+                .unwrap_or("_(untranslated)_");
+            writeln!(s, "| {} | {} |", e.locale, msgstr).unwrap();
+            s
+        });
         let table = format!("| Locale | Translation |\n|--------|-------------|\n{rows}");
         Some(Documentation::MarkupContent(MarkupContent {
             kind: MarkupKind::Markdown,

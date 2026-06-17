@@ -282,9 +282,11 @@ fn compute_add_plural_forms_edit(span: &PoEntrySpan, existing: u32, nplurals: u3
             character: u32::MAX,
         },
     };
-    let new_text: String = (existing..nplurals)
-        .map(|i| format!("\nmsgstr[{i}] \"\""))
-        .collect();
+    let new_text: String = (existing..nplurals).fold(String::new(), |mut s, i| {
+        use std::fmt::Write as _;
+        write!(s, "\nmsgstr[{i}] \"\"").unwrap();
+        s
+    });
     TextEdit { range, new_text }
 }
 

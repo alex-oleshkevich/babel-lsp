@@ -29,8 +29,8 @@ pub fn extract(
 
 // ── Tree walk ─────────────────────────────────────────────────────────────────
 
-fn walk<'tree>(
-    node: Node<'tree>,
+fn walk(
+    node: Node<'_>,
     source: &[u8],
     extra: &HashMap<String, TranslationFunc>,
     out: &mut Vec<TranslationCall>,
@@ -48,8 +48,8 @@ fn walk<'tree>(
     }
 }
 
-fn extract_call<'tree>(
-    node: Node<'tree>,
+fn extract_call(
+    node: Node<'_>,
     source: &[u8],
     extra: &HashMap<String, TranslationFunc>,
 ) -> Option<TranslationCall> {
