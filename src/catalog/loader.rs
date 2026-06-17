@@ -192,7 +192,10 @@ fn parse_po_str(content: &str, original_path: &Path) -> Result<polib::catalog::C
     let cursor = std::io::Cursor::new(content.as_bytes());
     match po_file::parse_from_reader(cursor) {
         Ok(catalog) => Ok(catalog),
-        Err(e) if e.to_string().contains("Metadata does not exist or is ill-formed") => {
+        Err(e)
+            if e.to_string()
+                .contains("Metadata does not exist or is ill-formed") =>
+        {
             let patched = format!(
                 "msgid \"\"\nmsgstr \"Content-Type: text/plain; charset=UTF-8\\n\"\n\n{content}"
             );
@@ -480,7 +483,7 @@ mod tests {
         // PoLineMap must record the line of the `msgid` keyword, not `msgid_plural`.
         let content = concat!(
             "msgid \"\"\nmsgstr \"\"\n\n",
-            "msgid \"%(n)d item\"\n",   // line 4
+            "msgid \"%(n)d item\"\n", // line 4
             "msgid_plural \"%(n)d items\"\n",
             "msgstr[0] \"\"\n",
             "msgstr[1] \"\"\n",

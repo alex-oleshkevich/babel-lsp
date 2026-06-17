@@ -110,7 +110,8 @@ impl WorkspaceState {
 
     /// Record whether the client supports `workspace/inlayHint/refresh` (REQ-HINT-05).
     pub fn set_inlay_hint_refresh_support(&self, val: bool) {
-        self.inlay_hint_refresh_support.store(val, Ordering::Relaxed);
+        self.inlay_hint_refresh_support
+            .store(val, Ordering::Relaxed);
     }
 
     /// Returns true if the client supports `workspace/inlayHint/refresh`.

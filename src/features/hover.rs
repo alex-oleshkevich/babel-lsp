@@ -23,7 +23,12 @@ pub fn hover_source(
         msgctxt: call.msgctxt.clone(),
     };
     let entries = index.lookup(&key);
-    render_card(&key, call.msgid_plural.as_deref(), call.msgid_range, entries)
+    render_card(
+        &key,
+        call.msgid_plural.as_deref(),
+        call.msgid_range,
+        entries,
+    )
 }
 
 /// Hover card for a catalog (.po/.pot) buffer.
@@ -117,7 +122,6 @@ fn entry_translation_and_status(entry: &CatalogEntry) -> (String, &'static str) 
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -138,7 +142,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec![msgstr.into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: PathBuf::from("/locale/messages.po"),
             line: 5,
         }
@@ -200,8 +207,15 @@ mod tests {
         let checkout = entry("de", "Checkout", "Kasse");
         let file_entries: Vec<&CatalogEntry> = vec![&checkout];
         // CatalogEntry.line is 1-based (5); cursor pos.line is 0-based (4).
-        let h = hover_catalog(&file_entries, Position { line: 4, character: 0 }, &index)
-            .expect("hover expected");
+        let h = hover_catalog(
+            &file_entries,
+            Position {
+                line: 4,
+                character: 0,
+            },
+            &index,
+        )
+        .expect("hover expected");
         assert!(card_text(&h).contains("Checkout"));
     }
 
@@ -210,7 +224,14 @@ mod tests {
         let index = shopfront_index();
         let checkout = entry("de", "Checkout", "Kasse");
         let file_entries: Vec<&CatalogEntry> = vec![&checkout];
-        let h = hover_catalog(&file_entries, Position { line: 0, character: 0 }, &index);
+        let h = hover_catalog(
+            &file_entries,
+            Position {
+                line: 0,
+                character: 0,
+            },
+            &index,
+        );
         assert!(h.is_none());
     }
 
@@ -231,7 +252,10 @@ mod tests {
         let index = shopfront_index();
         let h = hover_at(r#"_("Checkout")"#, 0, 5, &index).unwrap();
         let text = card_text(&h);
-        assert!(text.contains("| Locale | Domain | Translation | Status |"), "table header missing");
+        assert!(
+            text.contains("| Locale | Domain | Translation | Status |"),
+            "table header missing"
+        );
         assert!(text.contains("de"), "de row missing");
         assert!(text.contains("fr"), "fr row missing");
     }
@@ -241,7 +265,10 @@ mod tests {
         let index = CatalogIndex::build(vec![entry("de", "%(n)d item", "%(n)d Eintrag")]);
         let h = hover_at(r#"ngettext("%(n)d item", "%(n)d items", n)"#, 0, 10, &index).unwrap();
         let text = card_text(&h);
-        assert!(text.contains("**plural** `%(n)d items`"), "plural line missing");
+        assert!(
+            text.contains("**plural** `%(n)d items`"),
+            "plural line missing"
+        );
     }
 
     // ── REQ-HOV-03 ───────────────────────────────────────────────────────────
@@ -259,7 +286,10 @@ mod tests {
         let text = card_text(&h);
         assert!(text.contains("ok"), "ok status missing");
         assert!(text.contains("missing"), "missing status missing");
-        assert!(text.contains("—"), "em-dash for missing translation missing");
+        assert!(
+            text.contains("—"),
+            "em-dash for missing translation missing"
+        );
     }
 
     // ── REQ-HOV-04 ───────────────────────────────────────────────────────────
@@ -282,8 +312,20 @@ mod tests {
         // _("Checkout") — "Checkout" string node spans cols 2..12
         let h = hover_at(r#"_("Checkout")"#, 0, 5, &index).unwrap();
         let range = h.range.expect("hover range must be set");
-        assert_eq!(range.start, Position { line: 0, character: 2 }); // opening quote
-        assert_eq!(range.end, Position { line: 0, character: 12 }); // after closing quote
+        assert_eq!(
+            range.start,
+            Position {
+                line: 0,
+                character: 2
+            }
+        ); // opening quote
+        assert_eq!(
+            range.end,
+            Position {
+                line: 0,
+                character: 12
+            }
+        ); // after closing quote
     }
 
     #[test]
@@ -291,7 +333,14 @@ mod tests {
         let index = shopfront_index();
         // f-string → call.msgid is None → hover returns None.
         let calls = python::extract(br#"_(f"Hello {user}")"#, &no_extra());
-        let h = hover_source(&calls, Position { line: 0, character: 5 }, &index);
+        let h = hover_source(
+            &calls,
+            Position {
+                line: 0,
+                character: 5,
+            },
+            &index,
+        );
         assert!(h.is_none());
     }
 
@@ -308,7 +357,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec!["Zeile eins\nZeile zwei\nZeile drei".into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: std::path::PathBuf::from("/locale/messages.po"),
             line: 5, // 1-based, msgid starts at line 5
         };
@@ -316,19 +368,47 @@ mod tests {
         let file_entries = vec![&multiline_entry];
 
         // Hovering on the first line (0-based line 4 = 1-based line 5) must hit.
-        let h = hover_catalog(&file_entries, Position { line: 4, character: 0 }, &full_index);
+        let h = hover_catalog(
+            &file_entries,
+            Position {
+                line: 4,
+                character: 0,
+            },
+            &full_index,
+        );
         assert!(h.is_some(), "hover on first msgid line should hit");
 
         // Hovering on the second line (0-based line 5 = 1-based line 6) must also hit.
-        let h = hover_catalog(&file_entries, Position { line: 5, character: 0 }, &full_index);
+        let h = hover_catalog(
+            &file_entries,
+            Position {
+                line: 5,
+                character: 0,
+            },
+            &full_index,
+        );
         assert!(h.is_some(), "hover on second msgid line should hit");
 
         // Hovering on the third line (0-based line 6 = 1-based line 7) must also hit.
-        let h = hover_catalog(&file_entries, Position { line: 6, character: 0 }, &full_index);
+        let h = hover_catalog(
+            &file_entries,
+            Position {
+                line: 6,
+                character: 0,
+            },
+            &full_index,
+        );
         assert!(h.is_some(), "hover on third msgid line should hit");
 
         // Hovering past the entry (0-based line 7 = 1-based line 8) must miss.
-        let h = hover_catalog(&file_entries, Position { line: 7, character: 0 }, &full_index);
+        let h = hover_catalog(
+            &file_entries,
+            Position {
+                line: 7,
+                character: 0,
+            },
+            &full_index,
+        );
         assert!(h.is_none(), "hover past entry should miss");
     }
 }

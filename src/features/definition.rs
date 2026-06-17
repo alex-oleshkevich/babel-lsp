@@ -76,7 +76,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec!["".into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: PathBuf::from(path),
             line: 5,
         }
@@ -95,7 +98,14 @@ mod tests {
         index: &CatalogIndex,
     ) -> Option<GotoDefinitionResponse> {
         let calls = python::extract(src.as_bytes(), &no_extra());
-        goto_definition(&calls, Position { line, character: ch }, index)
+        goto_definition(
+            &calls,
+            Position {
+                line,
+                character: ch,
+            },
+            index,
+        )
     }
 
     // ── REQ-NAV-01 ───────────────────────────────────────────────────────────
@@ -127,7 +137,14 @@ mod tests {
     fn req_nav_01_fstring_returns_none() {
         let index = CatalogIndex::build(vec![entry("de", "Checkout", "/locale/de/messages.po")]);
         let calls = python::extract(br#"_(f"Checkout")"#, &no_extra());
-        let resp = goto_definition(&calls, Position { line: 0, character: 5 }, &index);
+        let resp = goto_definition(
+            &calls,
+            Position {
+                line: 0,
+                character: 5,
+            },
+            &index,
+        );
         assert!(resp.is_none());
     }
 
@@ -147,7 +164,11 @@ mod tests {
         };
         assert_eq!(locs.len(), 3);
         // .pot first
-        assert!(locs[0].uri.to_string().contains("messages.pot"), "pot not first: {:?}", locs[0].uri);
+        assert!(
+            locs[0].uri.to_string().contains("messages.pot"),
+            "pot not first: {:?}",
+            locs[0].uri
+        );
         // then de < fr alphabetically
         assert!(locs[1].uri.to_string().contains("de"));
         assert!(locs[2].uri.to_string().contains("fr"));

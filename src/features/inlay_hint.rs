@@ -21,7 +21,10 @@ pub fn inlay_hints(
         .filter(|c| c.msgid.is_some() && ranges_overlap(c.range, range))
         .filter_map(|call| {
             let msgid = call.msgid.as_deref()?;
-            let key = CatalogKey { msgid: msgid.into(), msgctxt: call.msgctxt.clone() };
+            let key = CatalogKey {
+                msgid: msgid.into(),
+                msgctxt: call.msgctxt.clone(),
+            };
             let label = resolve_label(index, &key, locale)?;
             Some(InlayHint {
                 position: call.range.end,
@@ -63,7 +66,11 @@ fn resolve_label(index: &CatalogIndex, key: &CatalogKey, locale: &str) -> Option
 fn truncate(s: &str) -> String {
     let mut chars = s.chars();
     let head: String = chars.by_ref().take(TRUNCATE_CHARS).collect();
-    if chars.next().is_some() { format!("{head}…") } else { head }
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
 }
 
 fn ranges_overlap(call: Range, viewport: Range) -> bool {
@@ -83,11 +90,17 @@ mod tests {
     use crate::extract::types::TranslationFunc;
 
     fn pos(line: u32, ch: u32) -> Position {
-        Position { line, character: ch }
+        Position {
+            line,
+            character: ch,
+        }
     }
 
     fn rng(sl: u32, sc: u32, el: u32, ec: u32) -> Range {
-        Range { start: pos(sl, sc), end: pos(el, ec) }
+        Range {
+            start: pos(sl, sc),
+            end: pos(el, ec),
+        }
     }
 
     fn make_entry(locale: &str, msgid: &str, msgstr: &str) -> CatalogEntry {
@@ -98,7 +111,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec![msgstr.into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: PathBuf::from("/locale/de/messages.po"),
             line: 1,
         }
@@ -199,7 +215,7 @@ mod tests {
             make_entry("de", "B", "Zwei"),
         ]);
         let calls = vec![
-            make_call("A", rng(1, 0, 1, 10)),  // in range
+            make_call("A", rng(1, 0, 1, 10)),   // in range
             make_call("B", rng(20, 0, 20, 10)), // outside
         ];
         let viewport = rng(0, 0, 5, 0);
@@ -221,7 +237,10 @@ mod tests {
             _ => panic!(),
         };
         assert!(label.contains('…'), "should contain ellipsis: {label:?}");
-        assert!(label.chars().count() < 60, "should be shorter than original");
+        assert!(
+            label.chars().count() < 60,
+            "should be shorter than original"
+        );
     }
 
     #[test]
@@ -246,7 +265,8 @@ mod tests {
         assert_eq!(hints.len(), 1);
         assert!(
             matches!(&hints[0].label, InlayHintLabel::String(s) if s.contains("untranslated")),
-            "got: {:?}", hints[0].label
+            "got: {:?}",
+            hints[0].label
         );
     }
 
@@ -262,7 +282,8 @@ mod tests {
         assert_eq!(hints.len(), 1);
         assert!(
             matches!(&hints[0].label, InlayHintLabel::String(s) if s.contains("fuzzy")),
-            "got: {:?}", hints[0].label
+            "got: {:?}",
+            hints[0].label
         );
     }
 

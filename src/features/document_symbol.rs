@@ -13,7 +13,10 @@ pub fn document_symbols(entries: &[&CatalogEntry]) -> Vec<DocumentSymbol> {
         .filter(|e| !e.msgid.is_empty())
         .map(|e| {
             let pos = entry_position(e);
-            let rng = Range { start: pos, end: pos };
+            let rng = Range {
+                start: pos,
+                end: pos,
+            };
             #[allow(deprecated)]
             DocumentSymbol {
                 name: symbol_name(&e.msgid, e.msgctxt.as_deref()),
@@ -41,7 +44,10 @@ pub fn workspace_symbols(index: &CatalogIndex, query: &str) -> Vec<WorkspaceSymb
                 .or_else(|| index.lookup(key).first())?;
             let uri = Uri::from_file_path(&entry.file_path)?;
             let pos = entry_position(entry);
-            let rng = Range { start: pos, end: pos };
+            let rng = Range {
+                start: pos,
+                end: pos,
+            };
             Some(WorkspaceSymbol {
                 name: symbol_name(&key.msgid, key.msgctxt.as_deref()),
                 kind: SymbolKind::STRING,
@@ -76,20 +82,32 @@ fn entry_detail(entry: &CatalogEntry) -> String {
 fn truncate(s: &str, limit: usize) -> String {
     let mut chars = s.chars();
     let head: String = chars.by_ref().take(limit).collect();
-    if chars.next().is_some() { format!("{head}…") } else { head }
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
 }
 
 /// Convert a 1-based catalog line to a 0-based LSP position.
 fn entry_position(entry: &CatalogEntry) -> Position {
-    Position { line: entry.line.saturating_sub(1), character: 0 }
+    Position {
+        line: entry.line.saturating_sub(1),
+        character: 0,
+    }
 }
 
 /// Match the query against msgid and msgctxt so "button" finds "button|Save" (REQ-SYM-06).
 fn query_matches(key: &CatalogKey, query: &str) -> bool {
-    if query.is_empty() { return true; }
+    if query.is_empty() {
+        return true;
+    }
     let q = query.to_lowercase();
     key.msgid.to_lowercase().contains(&q)
-        || key.msgctxt.as_deref().is_some_and(|ctx| ctx.to_lowercase().contains(&q))
+        || key
+            .msgctxt
+            .as_deref()
+            .is_some_and(|ctx| ctx.to_lowercase().contains(&q))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -109,7 +127,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec![msgstr.into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: PathBuf::from("/locale/de/messages.po"),
             line: 5,
         }
@@ -276,7 +297,11 @@ mod tests {
             OneOf::Left(loc) => loc,
             _ => panic!("expected location"),
         };
-        assert!(location.uri.to_string().ends_with(".pot"), "should prefer .pot: {:?}", location.uri);
+        assert!(
+            location.uri.to_string().ends_with(".pot"),
+            "should prefer .pot: {:?}",
+            location.uri
+        );
     }
 
     #[test]

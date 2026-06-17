@@ -54,9 +54,7 @@ fn run_op(op: PybabelOp, path: Option<PathBuf>, locale: Option<String>) -> i32 {
             1
         }
         RunResult::NotFound => {
-            eprintln!(
-                "error: pybabel not found — install Babel or set `pybabel_path` in config"
-            );
+            eprintln!("error: pybabel not found — install Babel or set `pybabel_path` in config");
             1
         }
     }

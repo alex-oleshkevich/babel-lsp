@@ -236,7 +236,8 @@ impl CatalogIndex {
 
     /// Returns all unique `.po` locale file paths (sorted, deduplicated).
     pub fn po_file_paths(&self) -> Vec<&Path> {
-        let mut paths: Vec<&Path> = self.entries
+        let mut paths: Vec<&Path> = self
+            .entries
             .values()
             .flatten()
             .map(|e| e.file_path.as_path())

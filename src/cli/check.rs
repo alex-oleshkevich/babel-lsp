@@ -84,7 +84,9 @@ impl ColorConfig {
         );
         let no_color = std::env::var("NO_COLOR").is_ok();
         let is_tty = std::io::stdout().is_terminal();
-        Self { enabled: !machine && !no_color && is_tty }
+        Self {
+            enabled: !machine && !no_color && is_tty,
+        }
     }
 
     pub fn severity(&self, sev: DiagnosticSeverity, s: &str) -> String {
@@ -101,15 +103,27 @@ impl ColorConfig {
     }
 
     pub fn dim(&self, s: &str) -> String {
-        if self.enabled { format!("\x1b[2m{s}\x1b[0m") } else { s.to_string() }
+        if self.enabled {
+            format!("\x1b[2m{s}\x1b[0m")
+        } else {
+            s.to_string()
+        }
     }
 
     pub fn cyan(&self, s: &str) -> String {
-        if self.enabled { format!("\x1b[36m{s}\x1b[0m") } else { s.to_string() }
+        if self.enabled {
+            format!("\x1b[36m{s}\x1b[0m")
+        } else {
+            s.to_string()
+        }
     }
 
     pub fn bold(&self, s: &str) -> String {
-        if self.enabled { format!("\x1b[1m{s}\x1b[0m") } else { s.to_string() }
+        if self.enabled {
+            format!("\x1b[1m{s}\x1b[0m")
+        } else {
+            s.to_string()
+        }
     }
 }
 
@@ -120,11 +134,14 @@ pub fn run_check(args: CheckArgs) -> i32 {
     let filter_paths: Vec<PathBuf> = if args.paths.is_empty() {
         vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))]
     } else {
-        args.paths.iter().map(|p| p.canonicalize().unwrap_or_else(|_| p.clone())).collect()
+        args.paths
+            .iter()
+            .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
+            .collect()
     };
 
-    let workspace_root = find_workspace_root(&filter_paths[0])
-        .unwrap_or_else(|| filter_paths[0].clone());
+    let workspace_root =
+        find_workspace_root(&filter_paths[0]).unwrap_or_else(|| filter_paths[0].clone());
 
     let config = resolve_config(&workspace_root);
 
@@ -145,15 +162,30 @@ pub fn run_check(args: CheckArgs) -> i32 {
         diag_cfg.ignore = args.ignore.clone();
     }
 
-    let mut findings = collect_findings(&workspace_root, &config, &diag_cfg, &filter_paths, !args.paths.is_empty());
+    let mut findings = collect_findings(
+        &workspace_root,
+        &config,
+        &diag_cfg,
+        &filter_paths,
+        !args.paths.is_empty(),
+    );
 
     if args.fix && !findings.is_empty() {
         apply_fix_pass(&findings, &workspace_root, &config);
-        findings = collect_findings(&workspace_root, &config, &diag_cfg, &filter_paths, !args.paths.is_empty());
+        findings = collect_findings(
+            &workspace_root,
+            &config,
+            &diag_cfg,
+            &filter_paths,
+            !args.paths.is_empty(),
+        );
     }
 
     findings.sort_by(|a, b| {
-        a.path.cmp(&b.path).then(a.line.cmp(&b.line)).then(a.col.cmp(&b.col))
+        a.path
+            .cmp(&b.path)
+            .then(a.line.cmp(&b.line))
+            .then(a.col.cmp(&b.col))
     });
 
     let color = ColorConfig::for_format(&args.output_format);
@@ -173,11 +205,21 @@ pub fn run_check(args: CheckArgs) -> i32 {
             println!("{}", color.bold("All checks passed!"));
         } else {
             let n = findings.len();
-            println!("{}", color.severity(DiagnosticSeverity::WARNING, &format!("Found {} {}.", n, if n == 1 { "error" } else { "errors" })));
+            println!(
+                "{}",
+                color.severity(
+                    DiagnosticSeverity::WARNING,
+                    &format!("Found {} {}.", n, if n == 1 { "error" } else { "errors" })
+                )
+            );
         }
     }
 
-    if args.exit_zero || findings.is_empty() { 0 } else { 1 }
+    if args.exit_zero || findings.is_empty() {
+        0
+    } else {
+        1
+    }
 }
 
 // ── Private helpers ────────────────────────────────────────────────────────────
@@ -194,7 +236,9 @@ fn collect_findings(
 
     let mut all_entries = vec![];
     for path in &catalog_paths {
-        let Some((locale, domain)) = locale_domain_from_po_path(path) else { continue };
+        let Some((locale, domain)) = locale_domain_from_po_path(path) else {
+            continue;
+        };
         if let Ok(entries) = load_po_file(path, &locale, &domain) {
             all_entries.extend(entries);
         }
@@ -202,17 +246,23 @@ fn collect_findings(
     let index = CatalogIndex::build(all_entries);
 
     let source_calls = scan_source_calls(workspace_root, config);
-    let all_calls: Vec<_> =
-        source_calls.iter().flat_map(|(_, calls)| calls.iter().cloned()).collect();
+    let all_calls: Vec<_> = source_calls
+        .iter()
+        .flat_map(|(_, calls)| calls.iter().cloned())
+        .collect();
 
     let mut findings: Vec<Finding> = vec![];
 
     for cat_path in &catalog_paths {
-        let Some(uri) = Uri::from_file_path(cat_path) else { continue };
+        let Some(uri) = Uri::from_file_path(cat_path) else {
+            continue;
+        };
         let file_entries = index.entries_for_file(cat_path);
         let diags = diagnostics::check_catalog(&file_entries, &uri, &index);
         for d in diagnostics::apply_diag_filter(diags, diag_cfg) {
-            let Some(code) = code_of(&d.code) else { continue };
+            let Some(code) = code_of(&d.code) else {
+                continue;
+            };
             findings.push(Finding {
                 path: cat_path.clone(),
                 line: d.range.start.line + 1,
@@ -227,10 +277,14 @@ fn collect_findings(
     }
 
     for (uri, pdiags) in diagnostics::check_project(&index, &all_calls) {
-        let Some(path) = uri.to_file_path() else { continue };
+        let Some(path) = uri.to_file_path() else {
+            continue;
+        };
         let path = path.into_owned();
         for d in diagnostics::apply_diag_filter(pdiags, diag_cfg) {
-            let Some(code) = code_of(&d.code) else { continue };
+            let Some(code) = code_of(&d.code) else {
+                continue;
+            };
             findings.push(Finding {
                 path: path.clone(),
                 line: d.range.start.line + 1,
@@ -245,10 +299,15 @@ fn collect_findings(
     }
 
     for (uri, calls) in &source_calls {
-        let Some(path) = uri.to_file_path() else { continue };
+        let Some(path) = uri.to_file_path() else {
+            continue;
+        };
         let path = path.into_owned();
-        for d in diagnostics::apply_diag_filter(diagnostics::check_source(calls, &index), diag_cfg) {
-            let Some(code) = code_of(&d.code) else { continue };
+        for d in diagnostics::apply_diag_filter(diagnostics::check_source(calls, &index), diag_cfg)
+        {
+            let Some(code) = code_of(&d.code) else {
+                continue;
+            };
             findings.push(Finding {
                 path: path.clone(),
                 line: d.range.start.line + 1,
@@ -265,21 +324,23 @@ fn collect_findings(
     if apply_filter {
         findings.retain(|f| {
             let abs = f.path.canonicalize().unwrap_or_else(|_| f.path.clone());
-            filter_paths.iter().any(|fp| abs.starts_with(fp) || abs == *fp)
+            filter_paths
+                .iter()
+                .any(|fp| abs.starts_with(fp) || abs == *fp)
         });
     }
 
     findings
 }
 
-const FIX_CODES: &[&str] =
-    &["po/missing-translation", "po/fuzzy", "po/format-mismatch", "po/plural-count"];
+const FIX_CODES: &[&str] = &[
+    "po/missing-translation",
+    "po/fuzzy",
+    "po/format-mismatch",
+    "po/plural-count",
+];
 
-fn apply_fix_pass(
-    findings: &[Finding],
-    workspace_root: &Path,
-    config: &crate::config::Config,
-) {
+fn apply_fix_pass(findings: &[Finding], workspace_root: &Path, config: &crate::config::Config) {
     let mut by_file: HashMap<PathBuf, Vec<(u32, String)>> = HashMap::new();
     for f in findings {
         if FIX_CODES.contains(&f.code.as_str()) {
@@ -294,10 +355,16 @@ fn apply_fix_pass(
     let catalog_paths = discover_catalogs(&locale_dirs);
 
     for (file_path, pairs) in &by_file {
-        let Ok(content) = std::fs::read_to_string(file_path) else { continue };
+        let Ok(content) = std::fs::read_to_string(file_path) else {
+            continue;
+        };
 
-        let Some((locale, domain)) = locale_domain_from_po_path(file_path) else { continue };
-        let Ok(entries) = load_po_file(file_path, &locale, &domain) else { continue };
+        let Some((locale, domain)) = locale_domain_from_po_path(file_path) else {
+            continue;
+        };
+        let Ok(entries) = load_po_file(file_path, &locale, &domain) else {
+            continue;
+        };
         let _ = catalog_paths; // loaded already to establish the index; entries are sufficient here
 
         let entry_refs: Vec<_> = entries.iter().collect();
@@ -314,7 +381,11 @@ fn apply_fix_pass(
 }
 
 pub(crate) fn find_workspace_root(start: &Path) -> Option<PathBuf> {
-    let start = if start.is_file() { start.parent()? } else { start };
+    let start = if start.is_file() {
+        start.parent()?
+    } else {
+        start
+    };
     for ancestor in start.ancestors() {
         if ancestor.join(".git").exists()
             || ancestor.join("pyproject.toml").exists()
@@ -327,7 +398,13 @@ pub(crate) fn find_workspace_root(start: &Path) -> Option<PathBuf> {
 }
 
 const PRUNE_DIRS: &[&str] = &[
-    ".git", "target", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
+    ".git",
+    "target",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
 ];
 
 fn scan_source_calls(
@@ -356,14 +433,24 @@ fn scan_source_calls(
         .filter(|e| e.file_type().is_file())
     {
         let path = entry.path();
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
         let is_py = ext == "py";
-        let is_jinja = config.jinja_extensions.iter().any(|je| je.trim_start_matches('.') == ext);
+        let is_jinja = config
+            .jinja_extensions
+            .iter()
+            .any(|je| je.trim_start_matches('.') == ext);
         if !is_py && !is_jinja {
             continue;
         }
-        let Some(uri) = Uri::from_file_path(path) else { continue };
-        let Ok(bytes) = std::fs::read(path) else { continue };
+        let Some(uri) = Uri::from_file_path(path) else {
+            continue;
+        };
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
         let calls = if is_py {
             crate::extract::python::extract(&bytes, &extra)
         } else {
@@ -524,7 +611,10 @@ mod tests {
 
         // File on disk now contains the fix.
         let fixed = std::fs::read_to_string(&po_path).unwrap();
-        assert!(fixed.contains("msgstr \"Save\""), "fix was written to disk: {fixed}");
+        assert!(
+            fixed.contains("msgstr \"Save\""),
+            "fix was written to disk: {fixed}"
+        );
     }
 
     #[test]
@@ -549,6 +639,9 @@ mod tests {
         assert_eq!(run_check(args), 0);
 
         let fixed = std::fs::read_to_string(&po_path).unwrap();
-        assert!(!fixed.contains("#, fuzzy"), "fuzzy flag should be removed: {fixed}");
+        assert!(
+            !fixed.contains("#, fuzzy"),
+            "fuzzy flag should be removed: {fixed}"
+        );
     }
 }

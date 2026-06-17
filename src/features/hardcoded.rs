@@ -13,19 +13,32 @@ use crate::util::po_edit::escape_po;
 const MIN_CHAR_LEN: usize = 3;
 
 const UI_CALL_NAMES: &[&str] = &[
-    "success", "error", "warning", "info", "message",
-    "flash", "notify", "alert", "add_message", "add_error",
-    "add_warning", "add_success",
+    "success",
+    "error",
+    "warning",
+    "info",
+    "message",
+    "flash",
+    "notify",
+    "alert",
+    "add_message",
+    "add_error",
+    "add_warning",
+    "add_success",
 ];
 
 const LOG_METHOD_NAMES: &[&str] = &[
-    "debug", "info", "warning", "warn", "error", "critical",
-    "exception", "log",
+    "debug",
+    "info",
+    "warning",
+    "warn",
+    "error",
+    "critical",
+    "exception",
+    "log",
 ];
 
-const LOG_OBJECT_NAMES: &[&str] = &[
-    "logger", "logging", "log", "app", "current_app",
-];
+const LOG_OBJECT_NAMES: &[&str] = &["logger", "logging", "log", "app", "current_app"];
 
 /// Detect hardcoded string literals in a source file that appear to be
 /// user-facing prose not wrapped in a translation call.
@@ -267,7 +280,11 @@ fn is_prose(content: &str) -> bool {
     if content.contains(' ') {
         return true;
     }
-    content.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+    content
+        .chars()
+        .next()
+        .map(|c| c.is_uppercase())
+        .unwrap_or(false)
 }
 
 /// True if the content should be excluded from detection even though it reads
@@ -282,10 +299,7 @@ fn is_excluded(content: &str) -> bool {
         return true;
     }
     // Unix path
-    if content.starts_with('/')
-        || content.starts_with("./")
-        || content.starts_with("../")
-    {
+    if content.starts_with('/') || content.starts_with("./") || content.starts_with("../") {
         return true;
     }
     // Email-like (no spaces, contains @)
@@ -301,7 +315,9 @@ fn is_dunder_or_constant(name: &str) -> bool {
     }
     let chars: Vec<char> = name.chars().collect();
     !chars.is_empty()
-        && chars.iter().all(|c| c.is_uppercase() || *c == '_' || c.is_ascii_digit())
+        && chars
+            .iter()
+            .all(|c| c.is_uppercase() || *c == '_' || c.is_ascii_digit())
         && chars.iter().any(|c| c.is_uppercase())
 }
 
@@ -321,7 +337,9 @@ fn is_log_call(func_node: Node, source: &[u8]) -> bool {
         .and_then(|n| n.utf8_text(source).ok())
         .unwrap_or_default();
     let obj_base = obj.split('.').next_back().unwrap_or(obj);
-    LOG_OBJECT_NAMES.iter().any(|&n| obj_base.eq_ignore_ascii_case(n))
+    LOG_OBJECT_NAMES
+        .iter()
+        .any(|&n| obj_base.eq_ignore_ascii_case(n))
 }
 
 fn is_ui_call(callee: &str) -> bool {
@@ -337,8 +355,12 @@ fn extract_string_content(raw: &str) -> Option<String> {
     let mut s = raw;
     loop {
         match s.chars().next()? {
-            'r' | 'R' => { s = &s[1..]; }
-            'u' | 'U' => { s = &s[1..]; }
+            'r' | 'R' => {
+                s = &s[1..];
+            }
+            'u' | 'U' => {
+                s = &s[1..];
+            }
             'f' | 'F' | 'b' | 'B' => return None,
             _ => break,
         }
@@ -377,8 +399,14 @@ fn node_range(node: Node) -> Range {
     let s = node.start_position();
     let e = node.end_position();
     Range {
-        start: Position { line: s.row as u32, character: s.column as u32 },
-        end: Position { line: e.row as u32, character: e.column as u32 },
+        start: Position {
+            line: s.row as u32,
+            character: s.column as u32,
+        },
+        end: Position {
+            line: e.row as u32,
+            character: e.column as u32,
+        },
     }
 }
 
@@ -427,7 +455,9 @@ pub fn code_actions_for_hardcoded(
             continue;
         }
 
-        let Some(line) = lines.get(range.start.line as usize) else { continue };
+        let Some(line) = lines.get(range.start.line as usize) else {
+            continue;
+        };
 
         // Column positions are byte offsets (tree-sitter node_range uses byte columns).
         let start = range.start.character as usize;
@@ -440,7 +470,9 @@ pub fn code_actions_for_hardcoded(
         }
 
         let raw_literal = &line[start..end];
-        let Some(content) = extract_string_content(raw_literal) else { continue };
+        let Some(content) = extract_string_content(raw_literal) else {
+            continue;
+        };
 
         // Wrap the raw literal to preserve Python escape sequences exactly.
         let source_edit = TextEdit {
@@ -479,7 +511,10 @@ pub fn code_actions_for_hardcoded(
                         changes.insert(source_uri.clone(), vec![source_edit.clone()]);
                         changes.insert(pot_uri.clone(), vec![pot_edit]);
                         for &(po_uri, po_content) in locale_po_files {
-                            changes.insert(po_uri.clone(), vec![pot_append_edit(po_content, &content)]);
+                            changes.insert(
+                                po_uri.clone(),
+                                vec![pot_append_edit(po_content, &content)],
+                            );
                         }
                         actions.push(quickfix("Extract message and add to all locales", changes));
                     }
@@ -495,7 +530,10 @@ fn quickfix(title: impl Into<String>, changes: HashMap<Uri, Vec<TextEdit>>) -> C
     CodeAction {
         title: title.into(),
         kind: Some(CodeActionKind::QUICKFIX),
-        edit: Some(WorkspaceEdit { changes: Some(changes), ..WorkspaceEdit::default() }),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..WorkspaceEdit::default()
+        }),
         ..CodeAction::default()
     }
 }
@@ -511,8 +549,14 @@ fn pot_append_edit(content: &str, msgid: &str) -> TextEdit {
     };
     TextEdit {
         range: Range {
-            start: Position { line: insert_line, character: insert_char },
-            end: Position { line: insert_line, character: insert_char },
+            start: Position {
+                line: insert_line,
+                character: insert_char,
+            },
+            end: Position {
+                line: insert_line,
+                character: insert_char,
+            },
         },
         new_text: format!("\nmsgid \"{}\"\nmsgstr \"\"\n", escape_po(msgid)),
     }
@@ -529,9 +573,9 @@ mod tests {
     }
 
     fn has(diags: &[Diagnostic]) -> bool {
-        diags
-            .iter()
-            .any(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "msg/hardcoded-string"))
+        diags.iter().any(
+            |d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "msg/hardcoded-string"),
+        )
     }
 
     // ── REQ-HARD-02: severity is Information ───────────────────────────────────
@@ -592,7 +636,10 @@ mod tests {
     fn req_hard_03_return_call_not_string_silent() {
         // return of a non-string call — the function result isn't flagged
         let diags = detect("def v():\n    return get_message()");
-        assert!(!has(&diags), "return of a call result is not a string literal");
+        assert!(
+            !has(&diags),
+            "return of a call result is not a string literal"
+        );
     }
 
     // ── REQ-HARD-04: Gate 2 — prose shape ────────────────────────────────────
@@ -607,7 +654,10 @@ mod tests {
     fn req_hard_04_single_capitalized_word_no_space_silent() {
         // Single capitalized words without spaces are identifiers/class names — not prose.
         let diags = detect("def v():\n    return \"Checkout\"");
-        assert!(!has(&diags), "single capitalized word without space is not prose");
+        assert!(
+            !has(&diags),
+            "single capitalized word without space is not prose"
+        );
     }
 
     #[test]
@@ -681,13 +731,19 @@ mod tests {
     #[test]
     fn req_hard_05_upper_constant_silent() {
         let diags = detect("ERROR_MSG = \"Something went wrong\"");
-        assert!(!has(&diags), "UPPER_CASE constant assignment should be silent");
+        assert!(
+            !has(&diags),
+            "UPPER_CASE constant assignment should be silent"
+        );
     }
 
     #[test]
     fn req_hard_05_too_short_silent() {
         let diags = detect("def v():\n    return \"OK\"");
-        assert!(!has(&diags), "short string below min length should be silent");
+        assert!(
+            !has(&diags),
+            "short string below min length should be silent"
+        );
     }
 
     // ── Overlap: method names in both UI and LOG lists ───────────────────────
@@ -704,14 +760,20 @@ mod tests {
     fn overlap_logger_error_silent_as_log_call() {
         // "error" is in both lists. logger.error is a log call (object "logger" is known logger).
         let diags = detect("logger.error(\"DB connection failed\")");
-        assert!(!has(&diags), "logger.error arg should be silent as log call");
+        assert!(
+            !has(&diags),
+            "logger.error arg should be silent as log call"
+        );
     }
 
     #[test]
     fn overlap_logging_warning_silent() {
         // "warning" is in both lists. logging.warning is a log call.
         let diags = detect("logging.warning(\"Deprecated API called\")");
-        assert!(!has(&diags), "logging.warning arg should be silent as log call");
+        assert!(
+            !has(&diags),
+            "logging.warning arg should be silent as log call"
+        );
     }
 
     // ── Extra behavioural checks ──────────────────────────────────────────────
@@ -721,14 +783,20 @@ mod tests {
         let mut extra = HashMap::new();
         extra.insert("t".to_string(), TranslationFunc::Gettext);
         let diags = check_python(b"def v():\n    return t(\"Checkout\")", &extra);
-        assert!(!has(&diags), "custom translation func should be treated as wrapped");
+        assert!(
+            !has(&diags),
+            "custom translation func should be treated as wrapped"
+        );
     }
 
     #[test]
     fn raise_inside_translation_call_silent() {
         // raise _(Error("...")) — contrived but ensures we don't double-flag
         let diags = detect("raise _(SomeError(\"Checkout\"))");
-        assert!(!has(&diags), "raise wrapping a translation call should be silent");
+        assert!(
+            !has(&diags),
+            "raise wrapping a translation call should be silent"
+        );
     }
 
     #[test]
@@ -740,8 +808,8 @@ mod tests {
 
     // ── Extract message quick fix ─────────────────────────────────────────────
 
-    use std::path::PathBuf;
     use crate::catalog::index::{CatalogEntry, CatalogIndex, EntryFlags};
+    use std::path::PathBuf;
 
     fn source_uri() -> Uri {
         Uri::from_file_path("/app/views.py").unwrap()
@@ -758,8 +826,14 @@ mod tests {
     fn make_diag_at(line: u32, start_char: u32, end_char: u32) -> Diagnostic {
         Diagnostic {
             range: Range {
-                start: Position { line, character: start_char },
-                end: Position { line, character: end_char },
+                start: Position {
+                    line,
+                    character: start_char,
+                },
+                end: Position {
+                    line,
+                    character: end_char,
+                },
             },
             code: Some(NumberOrString::String("msg/hardcoded-string".to_string())),
             ..Diagnostic::default()
@@ -778,7 +852,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec![String::new()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: PathBuf::from("/locale/messages.pot"),
             line: 1,
         };
@@ -786,11 +863,23 @@ mod tests {
     }
 
     fn first_source_edit(action: &CodeAction) -> Option<&TextEdit> {
-        action.edit.as_ref()?.changes.as_ref()?.get(&source_uri())?.first()
+        action
+            .edit
+            .as_ref()?
+            .changes
+            .as_ref()?
+            .get(&source_uri())?
+            .first()
     }
 
     fn first_pot_edit(action: &CodeAction) -> Option<&TextEdit> {
-        action.edit.as_ref()?.changes.as_ref()?.get(&pot_uri())?.first()
+        action
+            .edit
+            .as_ref()?
+            .changes
+            .as_ref()?
+            .get(&pot_uri())?
+            .first()
     }
 
     // ── REQ-HARD-06: extract wraps source and appends .pot ────────────────────
@@ -803,10 +892,18 @@ mod tests {
         let index = empty_index();
         let pot_content = "msgid \"\"\nmsgstr \"\"\n";
         let actions = code_actions_for_hardcoded(
-            &[diag], source, &source_uri(), "_",
-            Some((&pot_uri(), pot_content)), &index, &[],
+            &[diag],
+            source,
+            &source_uri(),
+            "_",
+            Some((&pot_uri(), pot_content)),
+            &index,
+            &[],
         );
-        let action = actions.iter().find(|a| a.title == "Extract message").unwrap();
+        let action = actions
+            .iter()
+            .find(|a| a.title == "Extract message")
+            .unwrap();
         let edit = first_source_edit(action).unwrap();
         assert_eq!(edit.new_text, "_(\"Order placed\")");
     }
@@ -818,13 +915,29 @@ mod tests {
         let index = empty_index();
         let pot_content = "msgid \"\"\nmsgstr \"\"\n";
         let actions = code_actions_for_hardcoded(
-            &[diag], source, &source_uri(), "_",
-            Some((&pot_uri(), pot_content)), &index, &[],
+            &[diag],
+            source,
+            &source_uri(),
+            "_",
+            Some((&pot_uri(), pot_content)),
+            &index,
+            &[],
         );
-        let action = actions.iter().find(|a| a.title == "Extract message").unwrap();
+        let action = actions
+            .iter()
+            .find(|a| a.title == "Extract message")
+            .unwrap();
         let pot_edit = first_pot_edit(action).unwrap();
-        assert!(pot_edit.new_text.contains("msgid \"Order placed\""), "got: {}", pot_edit.new_text);
-        assert!(pot_edit.new_text.contains("msgstr \"\""), "got: {}", pot_edit.new_text);
+        assert!(
+            pot_edit.new_text.contains("msgid \"Order placed\""),
+            "got: {}",
+            pot_edit.new_text
+        );
+        assert!(
+            pot_edit.new_text.contains("msgstr \"\""),
+            "got: {}",
+            pot_edit.new_text
+        );
     }
 
     #[test]
@@ -833,10 +946,18 @@ mod tests {
         let diag = make_diag_at(1, 11, 25);
         let index = empty_index();
         let actions = code_actions_for_hardcoded(
-            &[diag], source, &source_uri(), "_",
-            Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")), &index, &[],
+            &[diag],
+            source,
+            &source_uri(),
+            "_",
+            Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")),
+            &index,
+            &[],
         );
-        let action = actions.iter().find(|a| a.title == "Extract message").unwrap();
+        let action = actions
+            .iter()
+            .find(|a| a.title == "Extract message")
+            .unwrap();
         let changes = action.edit.as_ref().unwrap().changes.as_ref().unwrap();
         assert!(changes.contains_key(&source_uri()), "must have source edit");
         assert!(changes.contains_key(&pot_uri()), "must have .pot edit");
@@ -851,12 +972,20 @@ mod tests {
         let index = empty_index();
         let de_content = "msgid \"\"\nmsgstr \"\"\n";
         let actions = code_actions_for_hardcoded(
-            &[diag], source, &source_uri(), "_",
+            &[diag],
+            source,
+            &source_uri(),
+            "_",
             Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")),
-            &index, &[(&de_uri(), de_content)],
+            &index,
+            &[(&de_uri(), de_content)],
         );
-        assert!(actions.iter().any(|a| a.title == "Extract message and add to all locales"),
-            "locale seeding action should be offered when po files are present");
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.title == "Extract message and add to all locales"),
+            "locale seeding action should be offered when po files are present"
+        );
     }
 
     #[test]
@@ -866,15 +995,24 @@ mod tests {
         let index = empty_index();
         let de_content = "msgid \"\"\nmsgstr \"\"\n";
         let actions = code_actions_for_hardcoded(
-            &[diag], source, &source_uri(), "_",
+            &[diag],
+            source,
+            &source_uri(),
+            "_",
             Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")),
-            &index, &[(&de_uri(), de_content)],
+            &index,
+            &[(&de_uri(), de_content)],
         );
-        let action = actions.iter().find(|a| a.title == "Extract message and add to all locales").unwrap();
+        let action = actions
+            .iter()
+            .find(|a| a.title == "Extract message and add to all locales")
+            .unwrap();
         let changes = action.edit.as_ref().unwrap().changes.as_ref().unwrap();
         let po_edits = changes.get(&de_uri()).unwrap();
-        assert!(po_edits[0].new_text.contains("msgid \"Order placed\""),
-            "locale .po should get the new entry");
+        assert!(
+            po_edits[0].new_text.contains("msgid \"Order placed\""),
+            "locale .po should get the new entry"
+        );
     }
 
     #[test]
@@ -883,12 +1021,18 @@ mod tests {
         let diag = make_diag_at(1, 11, 25);
         let index = empty_index();
         let actions = code_actions_for_hardcoded(
-            &[diag], source, &source_uri(), "_",
+            &[diag],
+            source,
+            &source_uri(),
+            "_",
             Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")),
-            &index, &[],
+            &index,
+            &[],
         );
-        assert!(!actions.iter().any(|a| a.title.contains("all locales")),
-            "locale seeding action should not appear when no .po files");
+        assert!(
+            !actions.iter().any(|a| a.title.contains("all locales")),
+            "locale seeding action should not appear when no .po files"
+        );
     }
 
     // ── REQ-HARD-08: reuse existing msgid ─────────────────────────────────────
@@ -900,13 +1044,24 @@ mod tests {
         let diag = make_diag_at(1, 11, 21);
         let index = index_with_pot_entry("Checkout");
         let actions = code_actions_for_hardcoded(
-            &[diag], source, &source_uri(), "_",
-            Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")), &index, &[],
+            &[diag],
+            source,
+            &source_uri(),
+            "_",
+            Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")),
+            &index,
+            &[],
         );
-        assert!(actions.iter().any(|a| a.title.contains("already in catalog")),
-            "should say 'already in catalog'");
-        assert!(!actions.iter().any(|a| a.title == "Extract message"),
-            "should not offer full extract when already in catalog");
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.title.contains("already in catalog")),
+            "should say 'already in catalog'"
+        );
+        assert!(
+            !actions.iter().any(|a| a.title == "Extract message"),
+            "should not offer full extract when already in catalog"
+        );
     }
 
     #[test]
@@ -915,13 +1070,27 @@ mod tests {
         let diag = make_diag_at(1, 11, 21);
         let index = index_with_pot_entry("Checkout");
         let actions = code_actions_for_hardcoded(
-            &[diag], source, &source_uri(), "_",
-            Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")), &index, &[],
+            &[diag],
+            source,
+            &source_uri(),
+            "_",
+            Some((&pot_uri(), "msgid \"\"\nmsgstr \"\"\n")),
+            &index,
+            &[],
         );
-        let action = actions.iter().find(|a| a.title.contains("already in catalog")).unwrap();
+        let action = actions
+            .iter()
+            .find(|a| a.title.contains("already in catalog"))
+            .unwrap();
         let changes = action.edit.as_ref().unwrap().changes.as_ref().unwrap();
-        assert!(!changes.contains_key(&pot_uri()), "no .pot edit for existing msgid");
-        assert!(changes.contains_key(&source_uri()), "source edit still present");
+        assert!(
+            !changes.contains_key(&pot_uri()),
+            "no .pot edit for existing msgid"
+        );
+        assert!(
+            changes.contains_key(&source_uri()),
+            "source edit still present"
+        );
     }
 
     // ── REQ-HARD-10: correctness gate — no .pot → wrap only ──────────────────
@@ -931,12 +1100,13 @@ mod tests {
         let source = "def v():\n    return \"Order placed\"\n";
         let diag = make_diag_at(1, 11, 25);
         let index = empty_index();
-        let actions = code_actions_for_hardcoded(
-            &[diag], source, &source_uri(), "_",
-            None, &index, &[],
-        );
+        let actions =
+            code_actions_for_hardcoded(&[diag], source, &source_uri(), "_", None, &index, &[]);
         assert_eq!(actions.len(), 1);
-        assert!(actions[0].title.starts_with("Wrap in"), "should offer wrap-only action");
+        assert!(
+            actions[0].title.starts_with("Wrap in"),
+            "should offer wrap-only action"
+        );
         let changes = actions[0].edit.as_ref().unwrap().changes.as_ref().unwrap();
         assert_eq!(changes.len(), 1, "only source edit, no .pot edit");
     }
@@ -948,10 +1118,18 @@ mod tests {
         diag.code = Some(NumberOrString::String("po/missing-translation".to_string()));
         let index = empty_index();
         let actions = code_actions_for_hardcoded(
-            &[diag], source, &source_uri(), "_",
-            Some((&pot_uri(), "")), &index, &[],
+            &[diag],
+            source,
+            &source_uri(),
+            "_",
+            Some((&pot_uri(), "")),
+            &index,
+            &[],
         );
-        assert!(actions.is_empty(), "non-hardcoded diagnostic should be ignored");
+        assert!(
+            actions.is_empty(),
+            "non-hardcoded diagnostic should be ignored"
+        );
     }
 
     // ── pot_append_edit helpers ───────────────────────────────────────────────
@@ -960,7 +1138,10 @@ mod tests {
     fn pot_append_edit_inserts_at_end_when_trailing_newline() {
         let content = "msgid \"\"\nmsgstr \"\"\n";
         let edit = pot_append_edit(content, "Hello world");
-        assert!(edit.new_text.starts_with('\n'), "should start with blank separator");
+        assert!(
+            edit.new_text.starts_with('\n'),
+            "should start with blank separator"
+        );
         assert!(edit.new_text.contains("msgid \"Hello world\""));
         assert!(edit.new_text.contains("msgstr \"\""));
         // Insertion point is past the last line (line_count=2, char=0)
@@ -980,7 +1161,10 @@ mod tests {
     #[test]
     fn pot_append_edit_escapes_special_chars() {
         let edit = pot_append_edit("", "Say \"hello\"");
-        assert!(edit.new_text.contains("msgid \"Say \\\"hello\\\"\""),
-            "got: {}", edit.new_text);
+        assert!(
+            edit.new_text.contains("msgid \"Say \\\"hello\\\"\""),
+            "got: {}",
+            edit.new_text
+        );
     }
 }

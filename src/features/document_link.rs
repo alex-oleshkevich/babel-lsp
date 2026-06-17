@@ -22,9 +22,7 @@ pub fn document_links(
         };
 
         // Byte offset of the `#:` on this line (needed to compute column).
-        let line_prefix_bytes = raw_line
-            .find("#:")
-            .unwrap_or(0);
+        let line_prefix_bytes = raw_line.find("#:").unwrap_or(0);
         // Start of the token list: skip `#:` then optional space.
         let tokens_start = line_prefix_bytes + 2; // skip `#:`
 
@@ -42,8 +40,8 @@ pub fn document_links(
 }
 
 fn parse_reference_line(
-    rest: &str,           // text after the `#:` on the line
-    line_idx: u32,        // 0-based line index in the document
+    rest: &str,              // text after the `#:` on the line
+    line_idx: u32,           // 0-based line index in the document
     tokens_col_start: usize, // byte column where token area starts
     catalog_dir: &Path,
     workspace_root: Option<&Path>,
@@ -93,8 +91,14 @@ fn parse_reference_line(
         };
 
         let range = Range {
-            start: Position { line: line_idx, character: token_start as u32 },
-            end: Position { line: line_idx, character: token_end as u32 },
+            start: Position {
+                line: line_idx,
+                character: token_start as u32,
+            },
+            end: Position {
+                line: line_idx,
+                character: token_end as u32,
+            },
         };
 
         links.push(DocumentLink {
@@ -110,7 +114,11 @@ fn parse_reference_line(
 ///
 /// Returns `None` when no existing file is found for `path_str`, so callers
 /// do not emit links to non-existent files (REQ-NAV-09).
-fn resolve_path(path_str: &str, catalog_dir: &Path, workspace_root: Option<&Path>) -> Option<PathBuf> {
+fn resolve_path(
+    path_str: &str,
+    catalog_dir: &Path,
+    workspace_root: Option<&Path>,
+) -> Option<PathBuf> {
     let candidate = catalog_dir.join(path_str);
     if candidate.exists() {
         return Some(candidate);
@@ -162,7 +170,12 @@ mod tests {
         let links = links_for_tree(content, &catalog_dir, workspace);
         assert_eq!(links.len(), 1);
         assert!(
-            links[0].target.as_ref().unwrap().to_string().contains("views.py"),
+            links[0]
+                .target
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("views.py"),
             "target should point to views.py"
         );
         assert_eq!(links[0].range.start.line, 0);
@@ -177,8 +190,22 @@ mod tests {
         let content = "#: app/views.py:42 app/templates/checkout.html:8\n";
         let links = links_for_tree(content, &catalog_dir, workspace);
         assert_eq!(links.len(), 2);
-        assert!(links[0].target.as_ref().unwrap().to_string().contains("views.py"));
-        assert!(links[1].target.as_ref().unwrap().to_string().contains("checkout.html"));
+        assert!(
+            links[0]
+                .target
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("views.py")
+        );
+        assert!(
+            links[1]
+                .target
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("checkout.html")
+        );
     }
 
     // ── REQ-NAV-08 ───────────────────────────────────────────────────────────
@@ -195,7 +222,10 @@ mod tests {
         // The link range starts right after `#: ` at column 3.
         assert_eq!(links[0].range.start.character, 3);
         // token is `app/views.py:42` (15 chars), end = 3 + 15 = 18.
-        assert_eq!(links[0].range.end.character, 3 + "app/views.py:42".chars().count() as u32);
+        assert_eq!(
+            links[0].range.end.character,
+            3 + "app/views.py:42".chars().count() as u32
+        );
     }
 
     #[test]
@@ -208,7 +238,14 @@ mod tests {
         let content = "#: app/views.py app/other.py:10\n";
         let links = links_for_tree(content, &catalog_dir, workspace);
         assert_eq!(links.len(), 1);
-        assert!(links[0].target.as_ref().unwrap().to_string().contains("other.py"));
+        assert!(
+            links[0]
+                .target
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .contains("other.py")
+        );
     }
 
     #[test]
@@ -245,6 +282,9 @@ mod tests {
         fs::create_dir_all(&catalog_dir).unwrap();
         let content = "#: app/views.py:42\n";
         let links = links_for_tree(content, &catalog_dir, workspace);
-        assert!(links.is_empty(), "non-existent referenced file should produce no link");
+        assert!(
+            links.is_empty(),
+            "non-existent referenced file should produce no link"
+        );
     }
 }

@@ -49,7 +49,10 @@ pub fn find_references(
         for call in &calls {
             if call_matches_key(call, key) {
                 if let Some(range) = call.msgid_range {
-                    add(Location { uri: uri.clone(), range });
+                    add(Location {
+                        uri: uri.clone(),
+                        range,
+                    });
                 }
             }
         }
@@ -94,7 +97,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec!["".into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: PathBuf::from(path),
             line: 5,
         }
@@ -170,6 +176,9 @@ mod tests {
         // But the source call matches (pgettext with "button"/"Save").
         let uris: Vec<String> = locs.iter().map(|l| l.uri.to_string()).collect();
         assert!(uris.iter().any(|u| u.contains("views")));
-        assert!(!uris.iter().any(|u| u.contains("de")), "context mismatch should exclude catalog entry");
+        assert!(
+            !uris.iter().any(|u| u.contains("de")),
+            "context mismatch should exclude catalog entry"
+        );
     }
 }

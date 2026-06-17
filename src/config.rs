@@ -551,7 +551,11 @@ mod tests {
     fn merge_pybabel_path_overlay_wins() {
         // pybabel_path from a later config file must replace the earlier value.
         let dir = TempDir::new().unwrap();
-        write(&dir, "babel-lsp.toml", "pybabel_path = \"/usr/bin/pybabel\"\n");
+        write(
+            &dir,
+            "babel-lsp.toml",
+            "pybabel_path = \"/usr/bin/pybabel\"\n",
+        );
         write(
             &dir,
             "pyproject.toml",

@@ -88,7 +88,9 @@ pub fn parse_entry_spans(content: &str) -> Vec<PoEntrySpan> {
 
 /// Find the span whose entry bounds contain `line` (0-based), if any.
 pub fn span_at_line(spans: &[PoEntrySpan], line: u32) -> Option<&PoEntrySpan> {
-    spans.iter().find(|s| s.entry_start_line <= line && line <= s.msgstr_end_line)
+    spans
+        .iter()
+        .find(|s| s.entry_start_line <= line && line <= s.msgstr_end_line)
 }
 
 /// LSP range covering the entire msgstr block (for replacement edits).
@@ -102,8 +104,14 @@ pub fn msgstr_replace_range(span: &PoEntrySpan, lines: &[&str]) -> Range {
         .map(|l| l.len() as u32)
         .unwrap_or(0);
     Range {
-        start: Position { line: span.msgstr_start_line, character: 0 },
-        end: Position { line: span.msgstr_end_line, character: end_char },
+        start: Position {
+            line: span.msgstr_start_line,
+            character: 0,
+        },
+        end: Position {
+            line: span.msgstr_end_line,
+            character: end_char,
+        },
     }
 }
 
@@ -115,8 +123,14 @@ pub fn msgstr_replace_range(span: &PoEntrySpan, lines: &[&str]) -> Range {
 pub fn msgid_block_range(span: &PoEntrySpan) -> Range {
     let end_line = span.msgid_plural_line.unwrap_or(span.msgstr_start_line);
     Range {
-        start: Position { line: span.msgid_line, character: 0 },
-        end: Position { line: end_line, character: 0 },
+        start: Position {
+            line: span.msgid_line,
+            character: 0,
+        },
+        end: Position {
+            line: end_line,
+            character: 0,
+        },
     }
 }
 
@@ -125,8 +139,14 @@ pub fn flags_line_range(span: &PoEntrySpan, lines: &[&str]) -> Option<Range> {
     let fl = span.flags_line?;
     let end_char = lines.get(fl as usize).map(|l| l.len() as u32).unwrap_or(0);
     Some(Range {
-        start: Position { line: fl, character: 0 },
-        end: Position { line: fl, character: end_char },
+        start: Position {
+            line: fl,
+            character: 0,
+        },
+        end: Position {
+            line: fl,
+            character: end_char,
+        },
     })
 }
 
@@ -209,7 +229,9 @@ fn find_flags_before(lines: &[&str], msgid_idx: usize) -> Option<u32> {
             return Some(j as u32);
         }
         if line.starts_with('#') {
-            if j == 0 { return None; }
+            if j == 0 {
+                return None;
+            }
             j -= 1;
         } else {
             return None;
@@ -262,7 +284,8 @@ mod tests {
 
     #[test]
     fn plural_entry() {
-        let content = "msgid \"%(n)d item\"\nmsgid_plural \"%(n)d items\"\nmsgstr[0] \"\"\nmsgstr[1] \"\"\n";
+        let content =
+            "msgid \"%(n)d item\"\nmsgid_plural \"%(n)d items\"\nmsgstr[0] \"\"\nmsgstr[1] \"\"\n";
         let spans = parse_entry_spans(content);
         assert_eq!(spans.len(), 1);
         let s = &spans[0];

@@ -3,11 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 /// Command IDs registered at initialize (REQ-CMD-01).
-pub const COMMANDS: &[&str] = &[
-    "babel-lsp.extract",
-    "babel-lsp.update",
-    "babel-lsp.compile",
-];
+pub const COMMANDS: &[&str] = &["babel-lsp.extract", "babel-lsp.update", "babel-lsp.compile"];
 
 #[derive(Debug, Clone, Copy)]
 pub enum PybabelOp {
@@ -171,11 +167,17 @@ mod tests {
         o.locale = Some("fr".into());
 
         let update = build_args(PybabelOp::Update, &o);
-        let idx = update.iter().position(|a| a == "-l").expect("-l missing in update");
+        let idx = update
+            .iter()
+            .position(|a| a == "-l")
+            .expect("-l missing in update");
         assert_eq!(update[idx + 1], "fr");
 
         let compile = build_args(PybabelOp::Compile, &o);
-        let idx = compile.iter().position(|a| a == "-l").expect("-l missing in compile");
+        let idx = compile
+            .iter()
+            .position(|a| a == "-l")
+            .expect("-l missing in compile");
         assert_eq!(compile[idx + 1], "fr");
     }
 
@@ -185,7 +187,10 @@ mod tests {
         let mut o = base_opts(&tmp);
         o.locale = Some("fr".into());
         let args = build_args(PybabelOp::Extract, &o);
-        assert!(!args.contains(&"-l".to_string()), "extract must not pass -l");
+        assert!(
+            !args.contains(&"-l".to_string()),
+            "extract must not pass -l"
+        );
     }
 
     #[test]
@@ -204,7 +209,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut o = base_opts(&tmp);
         o.pybabel_path = Some(tmp.path().join("nonexistent_pybabel"));
-        assert!(matches!(run_pybabel(PybabelOp::Compile, &o), RunResult::NotFound));
+        assert!(matches!(
+            run_pybabel(PybabelOp::Compile, &o),
+            RunResult::NotFound
+        ));
     }
 
     #[test]
@@ -242,6 +250,9 @@ mod tests {
 
         let mut o = base_opts(&tmp);
         o.pybabel_path = Some(fake);
-        assert!(matches!(run_pybabel(PybabelOp::Compile, &o), RunResult::Success));
+        assert!(matches!(
+            run_pybabel(PybabelOp::Compile, &o),
+            RunResult::Success
+        ));
     }
 }

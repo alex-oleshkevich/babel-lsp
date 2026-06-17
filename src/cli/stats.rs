@@ -48,7 +48,9 @@ pub fn run_stats(args: StatsArgs) -> i32 {
     let start = if args.paths.is_empty() {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     } else {
-        args.paths[0].canonicalize().unwrap_or_else(|_| args.paths[0].clone())
+        args.paths[0]
+            .canonicalize()
+            .unwrap_or_else(|_| args.paths[0].clone())
     };
 
     let workspace_root = find_workspace_root(&start).unwrap_or(start);
@@ -59,7 +61,9 @@ pub fn run_stats(args: StatsArgs) -> i32 {
 
     let mut all_entries = vec![];
     for path in &catalog_paths {
-        let Some((locale, domain)) = locale_domain_from_po_path(path) else { continue };
+        let Some((locale, domain)) = locale_domain_from_po_path(path) else {
+            continue;
+        };
         if let Ok(entries) = load_po_file(path, &locale, &domain) {
             all_entries.extend(entries);
         }
@@ -76,7 +80,10 @@ pub fn run_stats(args: StatsArgs) -> i32 {
     }
 
     let source_keys: Vec<&CatalogKey> = if index.has_pot_entries() {
-        index.all_pot_keys().filter(|k| !k.msgid.is_empty()).collect()
+        index
+            .all_pot_keys()
+            .filter(|k| !k.msgid.is_empty())
+            .collect()
     } else {
         index.all_msgids().filter(|k| !k.msgid.is_empty()).collect()
     };
@@ -84,10 +91,17 @@ pub fn run_stats(args: StatsArgs) -> i32 {
 
     let mut by_locale: BTreeMap<String, LocaleStats> = BTreeMap::new();
     for locale in index.all_locales() {
-        let mut stats = LocaleStats { total, translated: 0, fuzzy: 0, missing: 0 };
+        let mut stats = LocaleStats {
+            total,
+            translated: 0,
+            fuzzy: 0,
+            missing: 0,
+        };
         for key in &source_keys {
             let entries = index.lookup(key);
-            let entry = entries.iter().find(|e| &e.locale == locale && !e.flags.obsolete);
+            let entry = entries
+                .iter()
+                .find(|e| &e.locale == locale && !e.flags.obsolete);
             match entry {
                 None => stats.missing += 1,
                 Some(e) if e.flags.fuzzy => stats.fuzzy += 1,
@@ -171,13 +185,23 @@ mod tests {
 
     #[test]
     fn translated_pct_correct() {
-        let s = LocaleStats { total: 100, translated: 97, fuzzy: 2, missing: 1 };
+        let s = LocaleStats {
+            total: 100,
+            translated: 97,
+            fuzzy: 2,
+            missing: 1,
+        };
         assert_eq!(s.translated_pct(), 97);
     }
 
     #[test]
     fn translated_pct_zero_total() {
-        let s = LocaleStats { total: 0, translated: 0, fuzzy: 0, missing: 0 };
+        let s = LocaleStats {
+            total: 0,
+            translated: 0,
+            fuzzy: 0,
+            missing: 0,
+        };
         assert_eq!(s.translated_pct(), 100);
     }
 
@@ -190,7 +214,15 @@ mod tests {
     #[test]
     fn render_json_has_required_fields() {
         let mut m = BTreeMap::new();
-        m.insert("de".into(), LocaleStats { total: 10, translated: 8, fuzzy: 1, missing: 1 });
+        m.insert(
+            "de".into(),
+            LocaleStats {
+                total: 10,
+                translated: 8,
+                fuzzy: 1,
+                missing: 1,
+            },
+        );
         let out = render_json(&m);
         assert!(out.contains("\"locale\":\"de\""));
         assert!(out.contains("\"total\":10"));
@@ -203,7 +235,15 @@ mod tests {
     #[test]
     fn render_table_contains_locale_and_counts() {
         let mut m = BTreeMap::new();
-        m.insert("de".into(), LocaleStats { total: 142, translated: 138, fuzzy: 3, missing: 1 });
+        m.insert(
+            "de".into(),
+            LocaleStats {
+                total: 142,
+                translated: 138,
+                fuzzy: 3,
+                missing: 1,
+            },
+        );
         let out = render_table(&m);
         assert!(out.contains("Locale"), "header missing");
         assert!(out.contains("de"), "locale missing");
@@ -216,8 +256,24 @@ mod tests {
     #[test]
     fn render_table_sorted_by_locale() {
         let mut m = BTreeMap::new();
-        m.insert("fr".into(), LocaleStats { total: 5, translated: 5, fuzzy: 0, missing: 0 });
-        m.insert("de".into(), LocaleStats { total: 5, translated: 3, fuzzy: 1, missing: 1 });
+        m.insert(
+            "fr".into(),
+            LocaleStats {
+                total: 5,
+                translated: 5,
+                fuzzy: 0,
+                missing: 0,
+            },
+        );
+        m.insert(
+            "de".into(),
+            LocaleStats {
+                total: 5,
+                translated: 3,
+                fuzzy: 1,
+                missing: 1,
+            },
+        );
         let out = render_table(&m);
         let de_pos = out.find("de").unwrap();
         let fr_pos = out.find("fr").unwrap();

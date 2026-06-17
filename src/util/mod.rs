@@ -31,8 +31,16 @@ pub fn char_offset_to_lsp_pos(rope: &Rope, char_offset: usize, enc: PositionEnco
     let col_chars = char_offset - line_start;
     let line_slice = rope.line(line);
     let character: usize = match enc {
-        PositionEncoding::Utf8 => line_slice.chars().take(col_chars).map(|c| c.len_utf8()).sum(),
-        PositionEncoding::Utf16 => line_slice.chars().take(col_chars).map(|c| c.len_utf16()).sum(),
+        PositionEncoding::Utf8 => line_slice
+            .chars()
+            .take(col_chars)
+            .map(|c| c.len_utf8())
+            .sum(),
+        PositionEncoding::Utf16 => line_slice
+            .chars()
+            .take(col_chars)
+            .map(|c| c.len_utf16())
+            .sum(),
     };
     Position {
         line: line as u32,

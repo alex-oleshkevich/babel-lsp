@@ -645,26 +645,38 @@ c = ngettext("%(n)d item", "%(n)d items", n)
     fn fstring_sets_fstring_reason() {
         let calls = ex(r#"_(f"Hello {user}")"#);
         assert_eq!(calls[0].unresolved_reason, Some(UnresolvedReason::FString));
-        assert!(calls[0].unresolved_arg_range.is_some(), "unresolved range must be set");
+        assert!(
+            calls[0].unresolved_arg_range.is_some(),
+            "unresolved range must be set"
+        );
     }
 
     #[test]
     fn percent_format_sets_format_before_call_reason() {
         let calls = ex(r#"_("Hi %s" % name)"#);
-        assert_eq!(calls[0].unresolved_reason, Some(UnresolvedReason::FormatBeforeCall));
+        assert_eq!(
+            calls[0].unresolved_reason,
+            Some(UnresolvedReason::FormatBeforeCall)
+        );
         assert!(calls[0].unresolved_arg_range.is_some());
     }
 
     #[test]
     fn format_method_sets_format_before_call_reason() {
         let calls = ex(r#"_("Hello {}".format(name))"#);
-        assert_eq!(calls[0].unresolved_reason, Some(UnresolvedReason::FormatBeforeCall));
+        assert_eq!(
+            calls[0].unresolved_reason,
+            Some(UnresolvedReason::FormatBeforeCall)
+        );
     }
 
     #[test]
     fn variable_arg_sets_non_constant_reason() {
         let calls = ex(r#"_(label)"#);
-        assert_eq!(calls[0].unresolved_reason, Some(UnresolvedReason::NonConstant));
+        assert_eq!(
+            calls[0].unresolved_reason,
+            Some(UnresolvedReason::NonConstant)
+        );
         assert!(calls[0].unresolved_arg_range.is_some());
     }
 

@@ -12,7 +12,9 @@ use server::Backend;
 use tower_lsp_server::{LspService, Server};
 
 use cli::check::{CheckArgs, run_check};
-use cli::pybabel_cmd::{CompileArgs, ExtractArgs, UpdateArgs, run_compile, run_extract, run_update};
+use cli::pybabel_cmd::{
+    CompileArgs, ExtractArgs, UpdateArgs, run_compile, run_extract, run_update,
+};
 use cli::stats::{StatsArgs, run_stats};
 
 #[derive(Parser)]

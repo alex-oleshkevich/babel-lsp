@@ -21,7 +21,10 @@ pub fn prepare_rename_source(
     })?;
     let msgid = call.msgid.clone()?;
     let range = call.msgid_range?;
-    let key = CatalogKey { msgid, msgctxt: call.msgctxt.clone() };
+    let key = CatalogKey {
+        msgid,
+        msgctxt: call.msgctxt.clone(),
+    };
     Some((range, key))
 }
 
@@ -50,10 +53,19 @@ pub fn prepare_rename_catalog(
     }
 
     let range = Range {
-        start: Position { line: cursor_line, character: start },
-        end: Position { line: cursor_line, character: end },
+        start: Position {
+            line: cursor_line,
+            character: start,
+        },
+        end: Position {
+            line: cursor_line,
+            character: end,
+        },
     };
-    let key = CatalogKey { msgid: entry.msgid.clone(), msgctxt: entry.msgctxt.clone() };
+    let key = CatalogKey {
+        msgid: entry.msgid.clone(),
+        msgctxt: entry.msgctxt.clone(),
+    };
     Some((range, key))
 }
 
@@ -72,7 +84,10 @@ pub fn build_rename_edit(
     call_sites: &[(Uri, Vec<TranslationCall>)],
 ) -> Result<WorkspaceEdit, String> {
     // REQ-RNM-07: collision guard — refuse if the target key already exists in catalog.
-    let new_key = CatalogKey { msgid: new_name.into(), msgctxt: key.msgctxt.clone() };
+    let new_key = CatalogKey {
+        msgid: new_name.into(),
+        msgctxt: key.msgctxt.clone(),
+    };
     if !index.lookup(&new_key).is_empty() || index.lookup_pot(&new_key).is_some() {
         return Err(format!(
             "Cannot rename: a message '{}' already exists — renaming would merge two messages",
@@ -115,26 +130,46 @@ pub fn build_rename_edit(
         if !seen_paths.insert(entry.file_path.as_path()) {
             continue;
         }
-        let Some(content) = catalog_bufs.get(&entry.file_path) else { continue };
-        let Some(uri) = Uri::from_file_path(&entry.file_path) else { continue };
+        let Some(content) = catalog_bufs.get(&entry.file_path) else {
+            continue;
+        };
+        let Some(uri) = Uri::from_file_path(&entry.file_path) else {
+            continue;
+        };
         let msgid_line = entry.line.saturating_sub(1);
         let spans = parse_entry_spans(content);
         let text_edit = if let Some(span) = span_at_line(&spans, msgid_line) {
             // Replace the entire msgid block (handles multi-line msgids).
             let range = msgid_block_range(span);
-            TextEdit { range, new_text: new_msgid_line.clone() }
+            TextEdit {
+                range,
+                new_text: new_msgid_line.clone(),
+            }
         } else {
             // Fallback: replace just the quoted text on the msgid line.
             let lines: Vec<&str> = content.lines().collect();
-            let Some(line_content) = lines.get(msgid_line as usize) else { continue };
-            let Some(kw_pos) = line_content.find("msgid \"") else { continue };
+            let Some(line_content) = lines.get(msgid_line as usize) else {
+                continue;
+            };
+            let Some(kw_pos) = line_content.find("msgid \"") else {
+                continue;
+            };
             let start_char = (kw_pos + 7) as u32;
             let end_char = line_content.chars().count() as u32 - 1;
             let range = Range {
-                start: Position { line: msgid_line, character: start_char },
-                end: Position { line: msgid_line, character: end_char },
+                start: Position {
+                    line: msgid_line,
+                    character: start_char,
+                },
+                end: Position {
+                    line: msgid_line,
+                    character: end_char,
+                },
             };
-            TextEdit { range, new_text: escaped.clone() }
+            TextEdit {
+                range,
+                new_text: escaped.clone(),
+            }
         };
         changes.entry(uri).or_default().push(text_edit);
     }
@@ -147,16 +182,19 @@ pub fn build_rename_edit(
                 && call.msgctxt.as_deref() == key.msgctxt.as_deref()
             {
                 if let Some(range) = call.msgid_range {
-                    changes
-                        .entry(uri.clone())
-                        .or_default()
-                        .push(TextEdit { range, new_text: new_name.to_string() });
+                    changes.entry(uri.clone()).or_default().push(TextEdit {
+                        range,
+                        new_text: new_name.to_string(),
+                    });
                 }
             }
         }
     }
 
-    Ok(WorkspaceEdit { changes: Some(changes), ..WorkspaceEdit::default() })
+    Ok(WorkspaceEdit {
+        changes: Some(changes),
+        ..WorkspaceEdit::default()
+    })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -177,7 +215,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec!["Übersetzung".into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: PathBuf::from(path),
             line,
         }
@@ -188,7 +229,10 @@ mod tests {
     }
 
     fn pos(line: u32, ch: u32) -> Position {
-        Position { line, character: ch }
+        Position {
+            line,
+            character: ch,
+        }
     }
 
     fn uri(path: &str) -> Uri {
@@ -216,7 +260,7 @@ mod tests {
         assert_eq!(key.msgid, "Checkout");
         assert_eq!(range.start.line, 0);
         assert_eq!(range.start.character, 7); // after `msgid "`
-        assert_eq!(range.end.character, 15);  // before closing `"`
+        assert_eq!(range.end.character, 15); // before closing `"`
     }
 
     // ── REQ-RNM-02: non-renameable positions are rejected ────────────────────
@@ -256,15 +300,16 @@ mod tests {
         let index = CatalogIndex::build(vec![e]);
         let key = CatalogKey::new("Checkout");
         let mut bufs = HashMap::new();
-        bufs.insert(
-            PathBuf::from("/locale/de/messages.po"),
-            content.to_string(),
-        );
+        bufs.insert(PathBuf::from("/locale/de/messages.po"), content.to_string());
         let edit = build_rename_edit(&key, "Checkout page", &index, &bufs, &[]).unwrap();
         let changes = edit.changes.unwrap();
         let edits = changes.values().next().unwrap();
         assert_eq!(edits.len(), 1);
-        assert!(edits[0].new_text.contains("Checkout page"), "got: {:?}", edits[0].new_text);
+        assert!(
+            edits[0].new_text.contains("Checkout page"),
+            "got: {:?}",
+            edits[0].new_text
+        );
     }
 
     #[test]
@@ -379,14 +424,21 @@ mod tests {
         let po_content = "msgid \"Checkout\"\nmsgstr \"\"\n".to_string();
         let mut bufs = HashMap::new();
         bufs.insert(PathBuf::from("/locale/messages.pot"), po_content.clone());
-        bufs.insert(PathBuf::from("/locale/de/messages.po"), "msgid \"Checkout\"\nmsgstr \"Kasse\"\n".to_string());
+        bufs.insert(
+            PathBuf::from("/locale/de/messages.po"),
+            "msgid \"Checkout\"\nmsgstr \"Kasse\"\n".to_string(),
+        );
         bufs.insert(PathBuf::from("/locale/fr/messages.po"), po_content);
         let edit = build_rename_edit(&key, "Checkout page", &index, &bufs, &[]).unwrap();
         let changes = edit.changes.unwrap();
         assert_eq!(changes.len(), 3, "should touch pot + de + fr");
         for edits in changes.values() {
             assert_eq!(edits.len(), 1);
-            assert!(edits[0].new_text.contains("Checkout page"), "got: {:?}", edits[0].new_text);
+            assert!(
+                edits[0].new_text.contains("Checkout page"),
+                "got: {:?}",
+                edits[0].new_text
+            );
         }
     }
 

@@ -107,7 +107,10 @@ pub fn check_source(calls: &[TranslationCall], index: &CatalogIndex) -> Vec<Diag
             }
         }
 
-        let key = CatalogKey { msgid: msgid.clone(), msgctxt: call.msgctxt.clone() };
+        let key = CatalogKey {
+            msgid: msgid.clone(),
+            msgctxt: call.msgctxt.clone(),
+        };
         let in_po = !index.lookup(&key).is_empty();
         let in_pot = index.is_in_pot(&key);
 
@@ -131,7 +134,11 @@ pub fn check_source(calls: &[TranslationCall], index: &CatalogIndex) -> Vec<Diag
                         r,
                         "msg/missing-in-locale",
                         DiagnosticSeverity::INFORMATION,
-                        format!("msgid '{}' is untranslated in: {}", msgid, missing.join(", ")),
+                        format!(
+                            "msgid '{}' is untranslated in: {}",
+                            msgid,
+                            missing.join(", ")
+                        ),
                     ));
                 }
             }
@@ -213,17 +220,28 @@ pub fn check_catalog(
 
     let mut diags = Vec::new();
 
-    let header = entries.iter().find(|e| e.msgid.is_empty() && !e.flags.obsolete).copied();
+    let header = entries
+        .iter()
+        .find(|e| e.msgid.is_empty() && !e.flags.obsolete)
+        .copied();
     let nplurals: Option<usize> = header.and_then(|h| parse_nplurals(&h.msgstr.join("")));
-    let has_plural_entries = entries.iter().any(|e| e.msgid_plural.is_some() && !e.flags.obsolete);
+    let has_plural_entries = entries
+        .iter()
+        .any(|e| e.msgid_plural.is_some() && !e.flags.obsolete);
 
     // po/header-missing
     match header {
         None => {
             diags.push(make_diag(
                 Range {
-                    start: Position { line: 0, character: 0 },
-                    end: Position { line: 0, character: 0 },
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 0,
+                    },
                 },
                 "po/header-missing",
                 DiagnosticSeverity::WARNING,
@@ -269,7 +287,10 @@ pub fn check_catalog(
                     ),
                 );
                 d.related_information = Some(vec![DiagnosticRelatedInformation {
-                    location: Location { uri: file_uri.clone(), range: entry_range(first) },
+                    location: Location {
+                        uri: file_uri.clone(),
+                        range: entry_range(first),
+                    },
                     message: format!("first defined at line {}", first.line),
                 }]);
                 diags.push(d);
@@ -326,7 +347,11 @@ pub fn check_catalog(
         }
 
         // po/blank: any form is non-empty but whitespace-only
-        if entry.msgstr.iter().any(|s| !s.is_empty() && s.trim().is_empty()) {
+        if entry
+            .msgstr
+            .iter()
+            .any(|s| !s.is_empty() && s.trim().is_empty())
+        {
             diags.push(make_diag(
                 entry_range(entry),
                 "po/blank",
@@ -388,8 +413,16 @@ pub fn check_catalog(
             }
             let src = sources.get(i).copied().unwrap_or(entry.msgid.as_str());
             for (src_specs, str_specs, style) in [
-                (printf_specifiers(src), printf_specifiers(msgstr_form), "printf"),
-                (brace_specifiers(src), brace_specifiers(msgstr_form), "brace"),
+                (
+                    printf_specifiers(src),
+                    printf_specifiers(msgstr_form),
+                    "printf",
+                ),
+                (
+                    brace_specifiers(src),
+                    brace_specifiers(msgstr_form),
+                    "brace",
+                ),
             ] {
                 if src_specs.is_empty() && str_specs.is_empty() {
                     continue;
@@ -448,15 +481,26 @@ pub fn check_catalog(
                 entry_range(entry),
                 "po/newline-count",
                 DiagnosticSeverity::WARNING,
-                format!("\\n count: source has {}, translation has {}", id_nl, str_nl),
+                format!(
+                    "\\n count: source has {}, translation has {}",
+                    id_nl, str_nl
+                ),
             ));
         }
 
         // po/whitespace-edges
         let id_lead: usize = msgid.chars().take_while(|c| c.is_whitespace()).count();
         let str_lead: usize = msgstr.chars().take_while(|c| c.is_whitespace()).count();
-        let id_trail: usize = msgid.chars().rev().take_while(|c| c.is_whitespace()).count();
-        let str_trail: usize = msgstr.chars().rev().take_while(|c| c.is_whitespace()).count();
+        let id_trail: usize = msgid
+            .chars()
+            .rev()
+            .take_while(|c| c.is_whitespace())
+            .count();
+        let str_trail: usize = msgstr
+            .chars()
+            .rev()
+            .take_while(|c| c.is_whitespace())
+            .count();
         if id_lead != str_lead || id_trail != str_trail {
             diags.push(make_diag(
                 entry_range(entry),
@@ -554,7 +598,10 @@ pub fn check_catalog(
                     entry_range(entry),
                     "po/url-changed",
                     DiagnosticSeverity::INFORMATION,
-                    format!("URL '{}' from source is absent or path-altered in translation", url),
+                    format!(
+                        "URL '{}' from source is absent or path-altered in translation",
+                        url
+                    ),
                 ));
             }
         }
@@ -597,34 +644,54 @@ fn proj_inconsistent_translation(index: &CatalogIndex, out: &mut HashMap<Uri, Ve
         // Group non-fuzzy, non-obsolete, non-empty entries by locale.
         let mut by_locale: HashMap<&str, Vec<&CatalogEntry>> = HashMap::new();
         for e in entries {
-            if e.flags.obsolete || e.flags.fuzzy { continue; }
-            if e.msgstr.iter().all(|s| s.is_empty()) { continue; }
+            if e.flags.obsolete || e.flags.fuzzy {
+                continue;
+            }
+            if e.msgstr.iter().all(|s| s.is_empty()) {
+                continue;
+            }
             by_locale.entry(e.locale.as_str()).or_default().push(e);
         }
 
         for locale_entries in by_locale.values() {
-            if locale_entries.len() < 2 { continue; }
+            if locale_entries.len() < 2 {
+                continue;
+            }
             let first = &locale_entries[0].msgstr;
-            if locale_entries.iter().all(|e| &e.msgstr == first) { continue; }
+            if locale_entries.iter().all(|e| &e.msgstr == first) {
+                continue;
+            }
 
             let related: Vec<DiagnosticRelatedInformation> = locale_entries
                 .iter()
                 .filter_map(|e| {
                     let uri = Uri::from_file_path(&e.file_path)?;
-                    let label = e.msgstr.first().map(|s| s.as_str()).unwrap_or("").to_string();
+                    let label = e
+                        .msgstr
+                        .first()
+                        .map(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     Some(DiagnosticRelatedInformation {
-                        location: Location { uri, range: entry_range(e) },
+                        location: Location {
+                            uri,
+                            range: entry_range(e),
+                        },
                         message: label,
                     })
                 })
                 .collect();
 
             for e in locale_entries {
-                let Some(uri) = Uri::from_file_path(&e.file_path) else { continue };
+                let Some(uri) = Uri::from_file_path(&e.file_path) else {
+                    continue;
+                };
                 out.entry(uri).or_default().push(Diagnostic {
                     range: entry_range(e),
                     severity: Some(DiagnosticSeverity::INFORMATION),
-                    code: Some(NumberOrString::String("proj/inconsistent-translation".into())),
+                    code: Some(NumberOrString::String(
+                        "proj/inconsistent-translation".into(),
+                    )),
                     code_description: None,
                     source: Some("babel-lsp".into()),
                     message: format!(
@@ -661,10 +728,16 @@ fn proj_unused_id(
         .collect();
 
     for key in index.all_msgids() {
-        if referenced.contains(key) { continue; }
+        if referenced.contains(key) {
+            continue;
+        }
         for entry in index.lookup(key) {
-            if entry.flags.obsolete { continue; }
-            let Some(uri) = Uri::from_file_path(&entry.file_path) else { continue };
+            if entry.flags.obsolete {
+                continue;
+            }
+            let Some(uri) = Uri::from_file_path(&entry.file_path) else {
+                continue;
+            };
             out.entry(uri).or_default().push(make_diag(
                 entry_range(entry),
                 "proj/unused-id",
@@ -675,9 +748,15 @@ fn proj_unused_id(
     }
 
     for key in index.all_pot_keys() {
-        if referenced.contains(key) { continue; }
-        let Some(entry) = index.lookup_pot(key) else { continue };
-        let Some(uri) = Uri::from_file_path(&entry.file_path) else { continue };
+        if referenced.contains(key) {
+            continue;
+        }
+        let Some(entry) = index.lookup_pot(key) else {
+            continue;
+        };
+        let Some(uri) = Uri::from_file_path(&entry.file_path) else {
+            continue;
+        };
         out.entry(uri).or_default().push(make_diag(
             entry_range(entry),
             "proj/unused-id",
@@ -694,7 +773,9 @@ fn proj_missing_locale_file(index: &CatalogIndex, out: &mut HashMap<Uri, Vec<Dia
 
     for key in index.all_msgids() {
         for entry in index.lookup(key) {
-            if entry.flags.obsolete || entry.locale.is_empty() { continue; }
+            if entry.flags.obsolete || entry.locale.is_empty() {
+                continue;
+            }
             let (locales, _) = by_domain
                 .entry(entry.domain.clone())
                 .or_insert_with(|| (Default::default(), entry.file_path.clone()));
@@ -720,9 +801,13 @@ fn proj_missing_locale_file(index: &CatalogIndex, out: &mut HashMap<Uri, Vec<Dia
             .get(domain.as_str())
             .copied()
             .unwrap_or(example_path.as_path());
-        let Some(uri) = Uri::from_file_path(anchor_path) else { continue };
+        let Some(uri) = Uri::from_file_path(anchor_path) else {
+            continue;
+        };
         for locale in all_locales {
-            if domain_locales.contains(locale) { continue; }
+            if domain_locales.contains(locale) {
+                continue;
+            }
             out.entry(uri.clone()).or_default().push(make_diag(
                 Range::default(),
                 "proj/missing-locale-file",
@@ -746,7 +831,11 @@ fn entry_range(entry: &CatalogEntry) -> Range {
 fn parse_nplurals(s: &str) -> Option<usize> {
     let line = s.lines().find(|l| l.contains("Plural-Forms"))?;
     let after = line.split("nplurals=").nth(1)?.trim_start();
-    after.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+    after
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
 }
 
 fn printf_specifiers(s: &str) -> Vec<String> {
@@ -877,7 +966,8 @@ fn extract_urls(s: &str) -> Vec<String> {
                 .unwrap_or(rest.len());
             let raw = &rest[..end];
             // Strip trailing ASCII punctuation that commonly appears in prose
-            let trimmed = raw.trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | '!' | '?'));
+            let trimmed =
+                raw.trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | '!' | '?'));
             urls.push(trimmed.to_string());
             idx += end;
         } else {
@@ -967,11 +1057,20 @@ fn numbers_equivalent(a: &[String], b: &[String]) -> bool {
     if a_vals.iter().any(|v| v.is_none()) || b_vals.iter().any(|v| v.is_none()) {
         return false;
     }
-    a_vals.sort_by(|x, y| x.unwrap().partial_cmp(&y.unwrap()).unwrap_or(std::cmp::Ordering::Equal));
-    b_vals.sort_by(|x, y| x.unwrap().partial_cmp(&y.unwrap()).unwrap_or(std::cmp::Ordering::Equal));
-    a_vals.iter().zip(b_vals.iter()).all(|(x, y)| {
-        (x.unwrap() - y.unwrap()).abs() < f64::EPSILON
-    })
+    a_vals.sort_by(|x, y| {
+        x.unwrap()
+            .partial_cmp(&y.unwrap())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    b_vals.sort_by(|x, y| {
+        x.unwrap()
+            .partial_cmp(&y.unwrap())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    a_vals
+        .iter()
+        .zip(b_vals.iter())
+        .all(|(x, y)| (x.unwrap() - y.unwrap()).abs() < f64::EPSILON)
 }
 
 fn has_repeated_word(s: &str) -> bool {
@@ -1016,7 +1115,9 @@ fn count_ampersand_accelerators(s: &str) -> usize {
 }
 
 fn trailing_punctuation_differs(msgid: &str, msgstr: &str) -> bool {
-    const PUNCT: &[char] = &['.', '!', '?', ':', ';', '\u{3002}', '\u{FF1F}', '\u{FF01}', '\u{FF1A}', '\u{FF1B}'];
+    const PUNCT: &[char] = &[
+        '.', '!', '?', ':', ';', '\u{3002}', '\u{FF1F}', '\u{FF01}', '\u{FF1A}', '\u{FF1B}',
+    ];
     let id_end = msgid.trim_end().chars().last();
     let str_end = msgstr.trim_end().chars().last();
     let id_punct = id_end.filter(|c| PUNCT.contains(c));
@@ -1054,7 +1155,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec![msgstr.into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: PathBuf::from("/locale/messages.po"),
             line: 1,
         }
@@ -1080,28 +1184,44 @@ mod tests {
     fn req_diag_06_fstring_in_call() {
         let c = calls(r#"_(f"Hello {user}")"#);
         let diags = check_source(&c, &empty_index());
-        assert!(has_code(&diags, "msg/fstring-in-call"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "msg/fstring-in-call"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
     fn req_diag_06_format_before_call_percent() {
         let c = calls(r#"_("Hi %s" % name)"#);
         let diags = check_source(&c, &empty_index());
-        assert!(has_code(&diags, "msg/format-before-call"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "msg/format-before-call"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
     fn req_diag_06_format_before_call_method() {
         let c = calls(r#"_("Hello {}".format(name))"#);
         let diags = check_source(&c, &empty_index());
-        assert!(has_code(&diags, "msg/format-before-call"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "msg/format-before-call"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
     fn req_diag_06_non_constant_id() {
         let c = calls(r#"_(label)"#);
         let diags = check_source(&c, &empty_index());
-        assert!(has_code(&diags, "msg/non-constant-id"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "msg/non-constant-id"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     // ── REQ-DIAG-02: unresolved call → msgid checks stay silent ──────────────
@@ -1110,7 +1230,11 @@ mod tests {
     fn req_diag_02_fstring_skips_unknown_id() {
         let c = calls(r#"_(f"Hello {user}")"#);
         let diags = check_source(&c, &empty_index());
-        assert!(!has_code(&diags, "msg/unknown-id"), "got: {:?}", codes(&diags));
+        assert!(
+            !has_code(&diags, "msg/unknown-id"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1148,7 +1272,11 @@ mod tests {
         let index = CatalogIndex::build(vec![make_entry("de", "Hello World", "Hallo Welt")]);
         let c = calls(r#"_("Hello " "World")"#);
         let diags = check_source(&c, &index);
-        assert!(has_code(&diags, "msg/implicit-concat"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "msg/implicit-concat"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1173,8 +1301,10 @@ mod tests {
         // _("File") has no context → key {msgid:"File", msgctxt:None} → not in pot
         let c = calls(r#"_("File")"#);
         let diags = check_source(&c, &index);
-        assert!(has_code(&diags, "msg/unknown-id"),
-            "plain _(\"File\") should fire unknown-id when only pgettext(\"menu\",\"File\") is in pot");
+        assert!(
+            has_code(&diags, "msg/unknown-id"),
+            "plain _(\"File\") should fire unknown-id when only pgettext(\"menu\",\"File\") is in pot"
+        );
     }
 
     // ── REQ-DIAG-05: msg/unknown-id ──────────────────────────────────────────
@@ -1183,7 +1313,11 @@ mod tests {
     fn req_diag_05_unknown_id_fires_when_not_in_any_catalog() {
         let c = calls(r#"_("Unknown")"#);
         let diags = check_source(&c, &empty_index());
-        assert!(has_code(&diags, "msg/unknown-id"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "msg/unknown-id"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1193,7 +1327,10 @@ mod tests {
         let index = CatalogIndex::build(vec![pot]);
         let c = calls(r#"_("Checkout")"#);
         let diags = check_source(&c, &index);
-        assert!(!has_code(&diags, "msg/unknown-id"), "should be silent when key is in pot");
+        assert!(
+            !has_code(&diags, "msg/unknown-id"),
+            "should be silent when key is in pot"
+        );
     }
 
     #[test]
@@ -1213,7 +1350,10 @@ mod tests {
             .find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "msg/unknown-id"))
             .expect("expected msg/unknown-id diagnostic");
         // msgid_range starts after `_(` at character 2
-        assert_eq!(d.range.start.character, 2, "squiggle should start at the literal");
+        assert_eq!(
+            d.range.start.character, 2,
+            "squiggle should start at the literal"
+        );
     }
 
     // ── msg/missing-in-locale ─────────────────────────────────────────────────
@@ -1226,14 +1366,22 @@ mod tests {
         ]);
         let c = calls(r#"_("Checkout")"#);
         let diags = check_source(&c, &index);
-        assert!(has_code(&diags, "msg/missing-in-locale"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "msg/missing-in-locale"),
+            "got: {:?}",
+            codes(&diags)
+        );
         let msg = diags
             .iter()
             .find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "msg/missing-in-locale"))
             .unwrap()
             .message
             .clone();
-        assert!(msg.contains("fr"), "message should name the missing locale, got: {}", msg);
+        assert!(
+            msg.contains("fr"),
+            "message should name the missing locale, got: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1343,7 +1491,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec![msgstr.into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: PathBuf::from("/locale/de/LC_MESSAGES/messages.po"),
             line: 5,
         }
@@ -1383,7 +1534,11 @@ mod tests {
     #[test]
     fn missing_translation_fires_on_empty_msgstr() {
         let diags = cat_check(vec![header_entry(), po_entry("Checkout", "")]);
-        assert!(has_code(&diags, "po/missing-translation"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/missing-translation"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1424,7 +1579,11 @@ mod tests {
         let mut e2 = po_entry("Checkout", "Kasse");
         e2.line = 10;
         let diags = cat_check(vec![header_entry(), e1, e2]);
-        assert!(has_code(&diags, "po/duplicate-id"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/duplicate-id"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1433,17 +1592,29 @@ mod tests {
         let mut e2 = po_entry("Checkout", "Kasse");
         e2.line = 10;
         let diags = cat_check(vec![header_entry(), e1, e2]);
-        let d = diags.iter().find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/duplicate-id"))
+        let d = diags
+            .iter()
+            .find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/duplicate-id"))
             .expect("expected po/duplicate-id");
-        assert!(d.related_information.is_some(), "must carry relatedInformation");
+        assert!(
+            d.related_information.is_some(),
+            "must carry relatedInformation"
+        );
         let rel = d.related_information.as_ref().unwrap();
         assert!(!rel.is_empty());
-        assert!(rel[0].message.contains("line"), "message should name the line");
+        assert!(
+            rel[0].message.contains("line"),
+            "message should name the line"
+        );
     }
 
     #[test]
     fn duplicate_id_silent_when_unique_keys() {
-        let diags = cat_check(vec![header_entry(), po_entry("Checkout", "Kasse"), po_entry("Login", "Anmelden")]);
+        let diags = cat_check(vec![
+            header_entry(),
+            po_entry("Checkout", "Kasse"),
+            po_entry("Login", "Anmelden"),
+        ]);
         assert!(!has_code(&diags, "po/duplicate-id"));
     }
 
@@ -1487,14 +1658,22 @@ mod tests {
     fn req_diag_07_format_mismatch_printf_missing() {
         let e = po_entry("%(num)d items in cart", "Artikel im Warenkorb");
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/format-mismatch"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/format-mismatch"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
     fn req_diag_07_format_mismatch_brace_missing() {
         let e = po_entry("Hello {name}", "Hallo");
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/format-mismatch"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/format-mismatch"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1502,7 +1681,11 @@ mod tests {
         // msgstr has %(extra)s not present in msgid
         let e = po_entry("Hello", "Hallo %(extra)s");
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/extra-variable"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/extra-variable"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1539,7 +1722,11 @@ mod tests {
         e.msgid_plural = Some("%(n)d items".into());
         e.msgstr = vec!["%(n)d article".into()]; // only 1 form, but nplurals=2
         let diags = cat_check(vec![header, e]);
-        assert!(has_code(&diags, "po/plural-count"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/plural-count"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1568,7 +1755,11 @@ mod tests {
     #[test]
     fn header_missing_fires_when_no_header_entry() {
         let diags = cat_check(vec![po_entry("Checkout", "Kasse")]);
-        assert!(has_code(&diags, "po/header-missing"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/header-missing"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1576,7 +1767,11 @@ mod tests {
         let mut h = header_entry();
         h.msgstr = vec!["Content-Type: text/plain\n".into()]; // no charset=
         let diags = cat_check(vec![h, po_entry("Checkout", "Kasse")]);
-        assert!(has_code(&diags, "po/header-missing"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/header-missing"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1587,7 +1782,11 @@ mod tests {
         e.msgid_plural = Some("%(n)d items".into());
         e.msgstr = vec!["%(n)d Artikel".into(), "%(n)d Artikel".into()];
         let diags = cat_check(vec![h, e]);
-        assert!(has_code(&diags, "po/header-missing"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/header-missing"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1602,7 +1801,11 @@ mod tests {
     fn req_diag_13_accelerator_mismatch_fires_when_msgid_has_one_and_msgstr_has_zero() {
         let e = po_entry("&File", "Datei"); // msgid has &, msgstr doesn't
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/accelerator-mismatch"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/accelerator-mismatch"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1626,7 +1829,11 @@ mod tests {
     fn escape_mismatch_fires_when_tab_differs() {
         let e = po_entry("a\\tb", "ab"); // msgid has \t, msgstr doesn't
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/escape-mismatch"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/escape-mismatch"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1643,7 +1850,11 @@ mod tests {
     fn newline_count_fires_when_counts_differ() {
         let e = po_entry("line1\nline2", "Zeile1");
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/newline-count"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/newline-count"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     // ── po/whitespace-edges ──────────────────────────────────────────────────
@@ -1652,7 +1863,11 @@ mod tests {
     fn whitespace_edges_fires_on_different_leading() {
         let e = po_entry(" Hello", "Hallo"); // msgid has leading space, msgstr doesn't
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/whitespace-edges"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/whitespace-edges"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     // ── po/end-punctuation ───────────────────────────────────────────────────
@@ -1661,7 +1876,11 @@ mod tests {
     fn end_punctuation_fires_when_period_missing_in_msgstr() {
         let e = po_entry("Save your changes.", "Änderungen speichern");
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/end-punctuation"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/end-punctuation"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1677,7 +1896,11 @@ mod tests {
     fn xml_tag_mismatch_fires_when_tag_dropped() {
         let e = po_entry("Click <b>here</b>", "Hier klicken");
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/xml-tag-mismatch"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/xml-tag-mismatch"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1718,7 +1941,11 @@ mod tests {
     fn bracket_count_fires_when_parens_differ() {
         let e = po_entry("Price (incl. tax)", "Preis exkl. Steuer");
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/bracket-count"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/bracket-count"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     // ── po/double-space ───────────────────────────────────────────────────────
@@ -1727,7 +1954,11 @@ mod tests {
     fn double_space_fires_in_msgstr_but_not_msgid() {
         let e = po_entry("Hello world", "Hallo  Welt");
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/double-space"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/double-space"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1743,7 +1974,11 @@ mod tests {
     fn repeated_word_fires_in_msgstr() {
         let e = po_entry("the book", "das das Buch");
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/repeated-word"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/repeated-word"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     // ── po/url-changed ───────────────────────────────────────────────────────
@@ -1752,7 +1987,11 @@ mod tests {
     fn url_changed_fires_when_url_dropped() {
         let e = po_entry("See https://example.com/path for details", "Siehe Details");
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/url-changed"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/url-changed"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1775,8 +2014,11 @@ mod tests {
             "Siehe https://example.com/path. Für Details.",
         );
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(!has_code(&diags, "po/url-changed"),
-            "trailing period on URL must not cause false positive, got: {:?}", codes(&diags));
+        assert!(
+            !has_code(&diags, "po/url-changed"),
+            "trailing period on URL must not cause false positive, got: {:?}",
+            codes(&diags)
+        );
     }
 
     // ── po/number-mismatch ───────────────────────────────────────────────────
@@ -1785,7 +2027,11 @@ mod tests {
     fn number_mismatch_fires_when_numbers_differ() {
         let e = po_entry("You have 5 items", "Sie haben 3 Artikel");
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/number-mismatch"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/number-mismatch"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1801,8 +2047,11 @@ mod tests {
         // "1,000" (English) vs "1000" (no separator) represent the same value
         let e = po_entry("You have 1,000 items", "Sie haben 1000 Artikel");
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(!has_code(&diags, "po/number-mismatch"),
-            "thousand-separated 1,000 vs 1000 must not fire, got: {:?}", codes(&diags));
+        assert!(
+            !has_code(&diags, "po/number-mismatch"),
+            "thousand-separated 1,000 vs 1000 must not fire, got: {:?}",
+            codes(&diags)
+        );
     }
 
     // ── po/same-plurals ───────────────────────────────────────────────────────
@@ -1813,7 +2062,11 @@ mod tests {
         e.msgid_plural = Some("%(n)d items".into());
         e.msgstr = vec!["%(n)d Artikel".into(), "%(n)d Artikel".into()];
         let diags = cat_check(vec![header_entry(), e]);
-        assert!(has_code(&diags, "po/same-plurals"), "got: {:?}", codes(&diags));
+        assert!(
+            has_code(&diags, "po/same-plurals"),
+            "got: {:?}",
+            codes(&diags)
+        );
     }
 
     #[test]
@@ -1839,7 +2092,10 @@ mod tests {
         let mut e = po_entry("Checkout", "Kasse");
         e.flags.fuzzy = true;
         let diags = cat_check(vec![header_entry(), e]);
-        let d = diags.iter().find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/fuzzy")).unwrap();
+        let d = diags
+            .iter()
+            .find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/fuzzy"))
+            .unwrap();
         assert_eq!(d.severity, Some(DiagnosticSeverity::INFORMATION));
     }
 
@@ -1849,7 +2105,10 @@ mod tests {
         let mut e2 = po_entry("Checkout", "Kasse");
         e2.line = 10;
         let diags = cat_check(vec![header_entry(), e1, e2]);
-        let d = diags.iter().find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/duplicate-id")).unwrap();
+        let d = diags
+            .iter()
+            .find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/duplicate-id"))
+            .unwrap();
         assert_eq!(d.severity, Some(DiagnosticSeverity::ERROR));
     }
 
@@ -1861,7 +2120,10 @@ mod tests {
         pot.file_path = "/locale/messages.pot".into();
         let index = CatalogIndex::build(vec![pot]);
         let diags = cat_check_with_index(vec![e], index);
-        let d = diags.iter().find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/obsolete")).unwrap();
+        let d = diags
+            .iter()
+            .find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/obsolete"))
+            .unwrap();
         assert_eq!(d.severity, Some(DiagnosticSeverity::HINT));
     }
 
@@ -1869,7 +2131,12 @@ mod tests {
     fn severity_format_mismatch_is_warning() {
         let e = po_entry("%(num)d items", "Artikel");
         let diags = cat_check(vec![header_entry(), e]);
-        let d = diags.iter().find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/format-mismatch")).unwrap();
+        let d = diags
+            .iter()
+            .find(
+                |d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/format-mismatch"),
+            )
+            .unwrap();
         assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING));
     }
 
@@ -1877,14 +2144,24 @@ mod tests {
     fn severity_extra_variable_is_warning() {
         let e = po_entry("Hello", "Hallo %(extra)s");
         let diags = cat_check(vec![header_entry(), e]);
-        let d = diags.iter().find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/extra-variable")).unwrap();
+        let d = diags
+            .iter()
+            .find(
+                |d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/extra-variable"),
+            )
+            .unwrap();
         assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING));
     }
 
     #[test]
     fn severity_header_missing_is_warning() {
         let diags = cat_check(vec![po_entry("Checkout", "Kasse")]);
-        let d = diags.iter().find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/header-missing")).unwrap();
+        let d = diags
+            .iter()
+            .find(
+                |d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/header-missing"),
+            )
+            .unwrap();
         assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING));
     }
 
@@ -1892,7 +2169,10 @@ mod tests {
     fn severity_unchanged_is_hint() {
         let e = po_entry("Checkout", "Checkout");
         let diags = cat_check(vec![header_entry(), e]);
-        let d = diags.iter().find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/unchanged")).unwrap();
+        let d = diags
+            .iter()
+            .find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/unchanged"))
+            .unwrap();
         assert_eq!(d.severity, Some(DiagnosticSeverity::HINT));
     }
 
@@ -1962,14 +2242,20 @@ mod tests {
         };
         let out = apply_diag_filter(vec![fuzzy_diag(), missing_diag()], &cfg);
         assert_eq!(out.len(), 1);
-        assert!(matches!(&out[0].code, Some(NumberOrString::String(s)) if s == "po/missing-translation"));
+        assert!(
+            matches!(&out[0].code, Some(NumberOrString::String(s)) if s == "po/missing-translation")
+        );
     }
 
     #[test]
     fn filter_severity_override_changes_level() {
         let mut sev = std::collections::HashMap::new();
         sev.insert("po/fuzzy".into(), "error".into());
-        let cfg = DiagnosticsConfig { select: vec!["all".into()], ignore: vec![], severity: sev };
+        let cfg = DiagnosticsConfig {
+            select: vec!["all".into()],
+            ignore: vec![],
+            severity: sev,
+        };
         let out = apply_diag_filter(vec![fuzzy_diag()], &cfg);
         assert_eq!(out[0].severity, Some(DiagnosticSeverity::ERROR));
     }
@@ -1978,7 +2264,11 @@ mod tests {
     fn filter_severity_invalid_string_clears_level() {
         let mut sev = std::collections::HashMap::new();
         sev.insert("po/fuzzy".into(), "bogus".into());
-        let cfg = DiagnosticsConfig { select: vec!["all".into()], ignore: vec![], severity: sev };
+        let cfg = DiagnosticsConfig {
+            select: vec!["all".into()],
+            ignore: vec![],
+            severity: sev,
+        };
         let out = apply_diag_filter(vec![fuzzy_diag()], &cfg);
         assert_eq!(out[0].severity, None);
     }
@@ -1993,7 +2283,13 @@ mod tests {
 
     use crate::extract::types::TranslationCall;
 
-    fn po_entry2(locale: &str, domain: &str, file: &str, msgid: &str, msgstr: &str) -> CatalogEntry {
+    fn po_entry2(
+        locale: &str,
+        domain: &str,
+        file: &str,
+        msgid: &str,
+        msgstr: &str,
+    ) -> CatalogEntry {
         CatalogEntry {
             locale: locale.into(),
             domain: domain.into(),
@@ -2001,7 +2297,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec![msgstr.into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: PathBuf::from(file),
             line: 5,
         }
@@ -2037,57 +2336,131 @@ mod tests {
         }
     }
 
-    fn proj_check(entries: Vec<CatalogEntry>, calls: Vec<TranslationCall>) -> HashMap<Uri, Vec<Diagnostic>> {
+    fn proj_check(
+        entries: Vec<CatalogEntry>,
+        calls: Vec<TranslationCall>,
+    ) -> HashMap<Uri, Vec<Diagnostic>> {
         let index = CatalogIndex::build(entries);
         check_project(&index, &calls)
     }
 
     fn any_code(out: &HashMap<Uri, Vec<Diagnostic>>, code: &str) -> bool {
-        out.values().flatten().any(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == code))
+        out.values()
+            .flatten()
+            .any(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == code))
     }
 
     // ── proj/inconsistent-translation ────────────────────────────────────────
 
     #[test]
     fn inconsistent_fires_when_same_locale_has_divergent_msgstr() {
-        let e1 = po_entry2("de", "messages", "/locale/de/a/messages.po", "Checkout", "Kasse");
-        let e2 = po_entry2("de", "messages", "/locale/de/b/messages.po", "Checkout", "Bezahlen");
+        let e1 = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/a/messages.po",
+            "Checkout",
+            "Kasse",
+        );
+        let e2 = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/b/messages.po",
+            "Checkout",
+            "Bezahlen",
+        );
         let out = proj_check(vec![e1, e2], vec![]);
-        assert!(any_code(&out, "proj/inconsistent-translation"), "got: {:?}", out);
+        assert!(
+            any_code(&out, "proj/inconsistent-translation"),
+            "got: {:?}",
+            out
+        );
     }
 
     #[test]
     fn inconsistent_carries_related_information() {
-        let e1 = po_entry2("de", "messages", "/locale/de/a/messages.po", "Checkout", "Kasse");
-        let e2 = po_entry2("de", "messages", "/locale/de/b/messages.po", "Checkout", "Bezahlen");
+        let e1 = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/a/messages.po",
+            "Checkout",
+            "Kasse",
+        );
+        let e2 = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/b/messages.po",
+            "Checkout",
+            "Bezahlen",
+        );
         let index = CatalogIndex::build(vec![e1, e2]);
         let out = check_project(&index, &[]);
         let diag = out.values().flatten()
             .find(|d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "proj/inconsistent-translation"))
             .expect("expected proj/inconsistent-translation");
-        assert!(diag.related_information.as_ref().map(|r| r.len() >= 2).unwrap_or(false));
+        assert!(
+            diag.related_information
+                .as_ref()
+                .map(|r| r.len() >= 2)
+                .unwrap_or(false)
+        );
     }
 
     #[test]
     fn inconsistent_silent_when_same_msgstr() {
-        let e1 = po_entry2("de", "messages", "/locale/de/a/messages.po", "Checkout", "Kasse");
-        let e2 = po_entry2("de", "messages", "/locale/de/b/messages.po", "Checkout", "Kasse");
+        let e1 = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/a/messages.po",
+            "Checkout",
+            "Kasse",
+        );
+        let e2 = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/b/messages.po",
+            "Checkout",
+            "Kasse",
+        );
         let out = proj_check(vec![e1, e2], vec![]);
         assert!(!any_code(&out, "proj/inconsistent-translation"));
     }
 
     #[test]
     fn inconsistent_silent_for_different_locales() {
-        let de = po_entry2("de", "messages", "/locale/de/messages.po", "Checkout", "Kasse");
-        let fr = po_entry2("fr", "messages", "/locale/fr/messages.po", "Checkout", "Caisse");
+        let de = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/messages.po",
+            "Checkout",
+            "Kasse",
+        );
+        let fr = po_entry2(
+            "fr",
+            "messages",
+            "/locale/fr/messages.po",
+            "Checkout",
+            "Caisse",
+        );
         let out = proj_check(vec![de, fr], vec![]);
         assert!(!any_code(&out, "proj/inconsistent-translation"));
     }
 
     #[test]
     fn inconsistent_skips_fuzzy_entries() {
-        let e1 = po_entry2("de", "messages", "/locale/de/a/messages.po", "Checkout", "Kasse");
-        let mut e2 = po_entry2("de", "messages", "/locale/de/b/messages.po", "Checkout", "Bezahlen");
+        let e1 = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/a/messages.po",
+            "Checkout",
+            "Kasse",
+        );
+        let mut e2 = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/b/messages.po",
+            "Checkout",
+            "Bezahlen",
+        );
         e2.flags.fuzzy = true;
         let out = proj_check(vec![e1, e2], vec![]);
         assert!(!any_code(&out, "proj/inconsistent-translation"));
@@ -2097,21 +2470,39 @@ mod tests {
 
     #[test]
     fn unused_id_fires_when_no_source_call_references_entry() {
-        let e = po_entry2("de", "messages", "/locale/de/messages.po", "Checkout", "Kasse");
+        let e = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/messages.po",
+            "Checkout",
+            "Kasse",
+        );
         let out = proj_check(vec![e], vec![]); // no calls at all
         assert!(any_code(&out, "proj/unused-id"), "got: {:?}", out);
     }
 
     #[test]
     fn unused_id_silent_when_call_references_id() {
-        let e = po_entry2("de", "messages", "/locale/de/messages.po", "Checkout", "Kasse");
+        let e = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/messages.po",
+            "Checkout",
+            "Kasse",
+        );
         let out = proj_check(vec![e], vec![source_call("Checkout")]);
         assert!(!any_code(&out, "proj/unused-id"));
     }
 
     #[test]
     fn unused_id_silent_p4_gate_on_unresolved_call() {
-        let e = po_entry2("de", "messages", "/locale/de/messages.po", "Checkout", "Kasse");
+        let e = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/messages.po",
+            "Checkout",
+            "Kasse",
+        );
         let out = proj_check(vec![e], vec![unresolved_call()]);
         assert!(!any_code(&out, "proj/unused-id"));
     }
@@ -2122,14 +2513,24 @@ mod tests {
         pot.locale = "".into(); // pot entry has empty locale
         let index = CatalogIndex::build(vec![pot]);
         let out = check_project(&index, &[]);
-        assert!(any_code(&out, "proj/unused-id"), "pot entry should fire unused-id, got: {:?}", out);
+        assert!(
+            any_code(&out, "proj/unused-id"),
+            "pot entry should fire unused-id, got: {:?}",
+            out
+        );
     }
 
     // ── proj/missing-locale-file ──────────────────────────────────────────────
 
     #[test]
     fn missing_locale_fires_when_locale_absent_from_domain() {
-        let de = po_entry2("de", "messages", "/locale/de/messages.po", "Checkout", "Kasse");
+        let de = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/messages.po",
+            "Checkout",
+            "Kasse",
+        );
         let fr = po_entry2("fr", "other", "/locale/fr/other.po", "Checkout", "Caisse");
         let out = proj_check(vec![de, fr], vec![]);
         // de has no "other" domain; fr has no "messages" domain
@@ -2138,8 +2539,20 @@ mod tests {
 
     #[test]
     fn missing_locale_silent_when_all_locales_covered() {
-        let de = po_entry2("de", "messages", "/locale/de/messages.po", "Checkout", "Kasse");
-        let fr = po_entry2("fr", "messages", "/locale/fr/messages.po", "Checkout", "Caisse");
+        let de = po_entry2(
+            "de",
+            "messages",
+            "/locale/de/messages.po",
+            "Checkout",
+            "Kasse",
+        );
+        let fr = po_entry2(
+            "fr",
+            "messages",
+            "/locale/fr/messages.po",
+            "Checkout",
+            "Caisse",
+        );
         let out = proj_check(vec![de, fr], vec![]);
         assert!(!any_code(&out, "proj/missing-locale-file"));
     }

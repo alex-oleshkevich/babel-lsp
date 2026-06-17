@@ -8,8 +8,7 @@ use tower_lsp_server::ls_types::{
 use crate::catalog::index::CatalogEntry;
 use crate::util::plural::parse_nplurals;
 use crate::util::po_edit::{
-    escape_po, flags_line_range, msgstr_replace_range, parse_entry_spans, span_at_line,
-    PoEntrySpan,
+    PoEntrySpan, escape_po, flags_line_range, msgstr_replace_range, parse_entry_spans, span_at_line,
 };
 
 /// Compute code actions for a `.po` / `.pot` catalog buffer.
@@ -49,9 +48,9 @@ pub fn code_actions_for_po(
             }
 
             // REQ-ACT-06: fix placeholder mismatch (fires when diagnostic is present).
-            let has_mismatch = params.context.diagnostics.iter().any(|d| {
-                matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/format-mismatch")
-            });
+            let has_mismatch = params.context.diagnostics.iter().any(
+                |d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "po/format-mismatch"),
+            );
             if has_mismatch && !entry.msgid.is_empty() {
                 actions.push(action_fix_placeholder(span, entry, &lines, uri));
             }
@@ -94,10 +93,14 @@ pub fn fix_edits_for_file(
     let mut edits = Vec::new();
 
     for &(zero_based_line, code) in finding_pairs {
-        let Some(span) = span_at_line(&spans, zero_based_line) else { continue };
+        let Some(span) = span_at_line(&spans, zero_based_line) else {
+            continue;
+        };
         match code {
             "po/missing-translation" => {
-                let Some(entry) = entry_for_span(entries, span) else { continue };
+                let Some(entry) = entry_for_span(entries, span) else {
+                    continue;
+                };
                 if !entry.msgid.is_empty() && entry.msgstr.iter().all(|s| s.is_empty()) {
                     edits.push(compute_copy_msgid_edit(span, entry, &lines, nplurals));
                 }
@@ -108,7 +111,9 @@ pub fn fix_edits_for_file(
                 }
             }
             "po/format-mismatch" => {
-                let Some(entry) = entry_for_span(entries, span) else { continue };
+                let Some(entry) = entry_for_span(entries, span) else {
+                    continue;
+                };
                 if !entry.msgid.is_empty() {
                     edits.push(compute_fix_placeholder_edit(span, entry, &lines));
                 }
@@ -137,7 +142,11 @@ fn action_copy_msgid(
     uri: &Uri,
     nplurals: Option<u32>,
 ) -> CodeAction {
-    make_quickfix("Copy msgid to msgstr", uri, compute_copy_msgid_edit(span, entry, lines, nplurals))
+    make_quickfix(
+        "Copy msgid to msgstr",
+        uri,
+        compute_copy_msgid_edit(span, entry, lines, nplurals),
+    )
 }
 
 fn compute_copy_msgid_edit(
@@ -169,13 +178,22 @@ fn compute_remove_fuzzy_edit(span: &PoEntrySpan, lines: &[&str]) -> Option<TextE
     let fl = span.flags_line?;
     let flags_content = lines.get(fl as usize)?;
     let after = flags_content.strip_prefix("#,")?.trim();
-    let remaining: Vec<&str> =
-        after.split(',').map(str::trim).filter(|f| *f != "fuzzy").collect();
+    let remaining: Vec<&str> = after
+        .split(',')
+        .map(str::trim)
+        .filter(|f| *f != "fuzzy")
+        .collect();
 
     let (range, new_text) = if remaining.is_empty() {
         let range = Range {
-            start: Position { line: fl, character: 0 },
-            end: Position { line: fl + 1, character: 0 },
+            start: Position {
+                line: fl,
+                character: 0,
+            },
+            end: Position {
+                line: fl + 1,
+                character: 0,
+            },
         };
         (range, String::new())
     } else {
@@ -198,8 +216,14 @@ fn action_mark_fuzzy(span: &PoEntrySpan, lines: &[&str], uri: &Uri) -> CodeActio
         (range, new)
     } else {
         let range = Range {
-            start: Position { line: span.msgid_line, character: 0 },
-            end: Position { line: span.msgid_line, character: 0 },
+            start: Position {
+                line: span.msgid_line,
+                character: 0,
+            },
+            end: Position {
+                line: span.msgid_line,
+                character: 0,
+            },
         };
         (range, "#, fuzzy\n".to_string())
     };
@@ -249,10 +273,18 @@ fn compute_add_plural_forms_edit(span: &PoEntrySpan, existing: u32, nplurals: u3
     // blank-line separator before the next entry.
     let anchor_line = span.msgstr_end_line;
     let range = Range {
-        start: Position { line: anchor_line, character: u32::MAX },
-        end: Position { line: anchor_line, character: u32::MAX },
+        start: Position {
+            line: anchor_line,
+            character: u32::MAX,
+        },
+        end: Position {
+            line: anchor_line,
+            character: u32::MAX,
+        },
     };
-    let new_text: String = (existing..nplurals).map(|i| format!("\nmsgstr[{i}] \"\"")).collect();
+    let new_text: String = (existing..nplurals)
+        .map(|i| format!("\nmsgstr[{i}] \"\""))
+        .collect();
     TextEdit { range, new_text }
 }
 
@@ -295,7 +327,10 @@ fn action_batch_copy(
     Some(CodeAction {
         title: format!("Copy msgid to all empty msgstr ({n} entries)"),
         kind: Some(CodeActionKind::SOURCE),
-        edit: Some(WorkspaceEdit { changes: Some(changes), ..WorkspaceEdit::default() }),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..WorkspaceEdit::default()
+        }),
         ..CodeAction::default()
     })
 }
@@ -308,13 +343,22 @@ fn make_quickfix(title: &str, uri: &Uri, edit: TextEdit) -> CodeAction {
     CodeAction {
         title: title.to_string(),
         kind: Some(CodeActionKind::QUICKFIX),
-        edit: Some(WorkspaceEdit { changes: Some(changes), ..WorkspaceEdit::default() }),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..WorkspaceEdit::default()
+        }),
         ..CodeAction::default()
     }
 }
 
-fn entry_for_span<'a>(entries: &[&'a CatalogEntry], span: &PoEntrySpan) -> Option<&'a CatalogEntry> {
-    entries.iter().find(|e| e.line > 0 && e.line - 1 == span.msgid_line).copied()
+fn entry_for_span<'a>(
+    entries: &[&'a CatalogEntry],
+    span: &PoEntrySpan,
+) -> Option<&'a CatalogEntry> {
+    entries
+        .iter()
+        .find(|e| e.line > 0 && e.line - 1 == span.msgid_line)
+        .copied()
 }
 
 fn nplurals_from_entries(entries: &[&CatalogEntry]) -> Option<u32> {
@@ -382,10 +426,20 @@ mod tests {
         CodeActionParams {
             text_document: TextDocumentIdentifier { uri: uri() },
             range: Range {
-                start: Position { line: start, character: 0 },
-                end: Position { line: end, character: 0 },
+                start: Position {
+                    line: start,
+                    character: 0,
+                },
+                end: Position {
+                    line: end,
+                    character: 0,
+                },
             },
-            context: CodeActionContext { diagnostics: vec![], only: None, trigger_kind: None },
+            context: CodeActionContext {
+                diagnostics: vec![],
+                only: None,
+                trigger_kind: None,
+            },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
         }
@@ -409,7 +463,10 @@ mod tests {
             msgctxt: None,
             msgid_plural: None,
             msgstr: vec![msgstr.into()],
-            flags: EntryFlags { fuzzy: false, obsolete: false },
+            flags: EntryFlags {
+                fuzzy: false,
+                obsolete: false,
+            },
             file_path: PathBuf::from("/locale/de/messages.po"),
             line,
         }
@@ -431,12 +488,22 @@ mod tests {
     fn header_entry(nplurals: u32) -> CatalogEntry {
         // line=0 is below the 1-based threshold so entry_for_span never matches it.
         let mut e = entry("", "", 0);
-        e.msgstr = vec![format!("Plural-Forms: nplurals={nplurals}; plural=(n != 1);\n")];
+        e.msgstr = vec![format!(
+            "Plural-Forms: nplurals={nplurals}; plural=(n != 1);\n"
+        )];
         e
     }
 
     fn first_edit(actions: &[CodeAction]) -> Option<&TextEdit> {
-        actions.first()?.edit.as_ref()?.changes.as_ref()?.values().next()?.first()
+        actions
+            .first()?
+            .edit
+            .as_ref()?
+            .changes
+            .as_ref()?
+            .values()
+            .next()?
+            .first()
     }
 
     // ── REQ-ACT-04: copy msgid to msgstr ─────────────────────────────────────
@@ -446,7 +513,10 @@ mod tests {
         let content = "msgid \"Save\"\nmsgstr \"\"\n";
         let e = entry("Save", "", 1);
         let actions = code_actions_for_po(&params(0), content, &[&e], &uri());
-        let action = actions.iter().find(|a| a.title.contains("Copy msgid")).unwrap();
+        let action = actions
+            .iter()
+            .find(|a| a.title.contains("Copy msgid"))
+            .unwrap();
         let edit = first_edit(std::slice::from_ref(action)).unwrap();
         assert_eq!(edit.new_text, "msgstr \"Save\"");
     }
@@ -466,7 +536,10 @@ mod tests {
         let h = header_entry(2);
         let e = plural_entry("%(n)d item", "%(n)d items", 1);
         let actions = code_actions_for_po(&params(0), content, &[&h, &e], &uri());
-        let action = actions.iter().find(|a| a.title.contains("Copy msgid")).unwrap();
+        let action = actions
+            .iter()
+            .find(|a| a.title.contains("Copy msgid"))
+            .unwrap();
         let edit = first_edit(std::slice::from_ref(action)).unwrap();
         assert!(edit.new_text.contains("msgstr[0]"));
         assert!(edit.new_text.contains("msgstr[1]"));
@@ -479,9 +552,16 @@ mod tests {
         let content = "msgid \"Say \\\"hello\\\"\"\nmsgstr \"\"\n";
         let e = entry("Say \"hello\"", "", 1);
         let actions = code_actions_for_po(&params(0), content, &[&e], &uri());
-        let action = actions.iter().find(|a| a.title.contains("Copy msgid")).unwrap();
+        let action = actions
+            .iter()
+            .find(|a| a.title.contains("Copy msgid"))
+            .unwrap();
         let edit = first_edit(std::slice::from_ref(action)).unwrap();
-        assert!(edit.new_text.contains("\\\"hello\\\""), "got: {}", edit.new_text);
+        assert!(
+            edit.new_text.contains("\\\"hello\\\""),
+            "got: {}",
+            edit.new_text
+        );
     }
 
     // ── REQ-ACT-05: remove fuzzy ──────────────────────────────────────────────
@@ -551,7 +631,10 @@ mod tests {
         let e = entry("%(n)s item", "%(n)d item", 1);
         let p = params_with_diag(0, "po/format-mismatch");
         let actions = code_actions_for_po(&p, content, &[&e], &uri());
-        let action = actions.iter().find(|a| a.title.contains("placeholder")).unwrap();
+        let action = actions
+            .iter()
+            .find(|a| a.title.contains("placeholder"))
+            .unwrap();
         let edit = first_edit(std::slice::from_ref(action)).unwrap();
         assert!(edit.new_text.contains("%(n)s item"));
     }
@@ -568,15 +651,21 @@ mod tests {
 
     #[test]
     fn req_act_07_add_missing_plural_forms() {
-        let content =
-            "msgid \"%(n)d item\"\nmsgid_plural \"%(n)d items\"\nmsgstr[0] \"\"\n";
+        let content = "msgid \"%(n)d item\"\nmsgid_plural \"%(n)d items\"\nmsgstr[0] \"\"\n";
         let h = header_entry(2);
         let mut e = plural_entry("%(n)d item", "%(n)d items", 1);
         e.msgstr = vec!["".into()];
         let actions = code_actions_for_po(&params(0), content, &[&h, &e], &uri());
-        let action = actions.iter().find(|a| a.title.contains("missing plural")).unwrap();
+        let action = actions
+            .iter()
+            .find(|a| a.title.contains("missing plural"))
+            .unwrap();
         let edit = first_edit(std::slice::from_ref(action)).unwrap();
-        assert!(edit.new_text.contains("msgstr[1]"), "got: {}", edit.new_text);
+        assert!(
+            edit.new_text.contains("msgstr[1]"),
+            "got: {}",
+            edit.new_text
+        );
     }
 
     #[test]
@@ -633,8 +722,16 @@ mod tests {
     fn req_cmd_02_command_action_carries_command_not_edit() {
         let actions = command_actions_for_po(true);
         for action in &actions {
-            assert!(action.command.is_some(), "action {:?} must have a Command", action.title);
-            assert!(action.edit.is_none(), "action {:?} must not have an edit", action.title);
+            assert!(
+                action.command.is_some(),
+                "action {:?} must have a Command",
+                action.title
+            );
+            assert!(
+                action.edit.is_none(),
+                "action {:?} must not have an edit",
+                action.title
+            );
         }
     }
 
@@ -656,13 +753,25 @@ mod tests {
     #[test]
     fn req_cmd_03_command_ids_are_correct() {
         let po_actions = command_actions_for_po(true);
-        let update = po_actions.iter().find(|a| a.title == "Update from template").unwrap();
+        let update = po_actions
+            .iter()
+            .find(|a| a.title == "Update from template")
+            .unwrap();
         assert_eq!(update.command.as_ref().unwrap().command, "babel-lsp.update");
-        let compile = po_actions.iter().find(|a| a.title == "Compile catalog").unwrap();
-        assert_eq!(compile.command.as_ref().unwrap().command, "babel-lsp.compile");
+        let compile = po_actions
+            .iter()
+            .find(|a| a.title == "Compile catalog")
+            .unwrap();
+        assert_eq!(
+            compile.command.as_ref().unwrap().command,
+            "babel-lsp.compile"
+        );
 
         let cfg_actions = command_actions_for_config(true);
-        assert_eq!(cfg_actions[0].command.as_ref().unwrap().command, "babel-lsp.extract");
+        assert_eq!(
+            cfg_actions[0].command.as_ref().unwrap().command,
+            "babel-lsp.extract"
+        );
     }
 
     #[test]
@@ -673,8 +782,16 @@ mod tests {
 
     #[test]
     fn req_cmd_03_command_actions_are_source_kind() {
-        for action in command_actions_for_po(true).iter().chain(command_actions_for_config(true).iter()) {
-            assert_eq!(action.kind, Some(CodeActionKind::SOURCE), "action '{}' must be SOURCE kind", action.title);
+        for action in command_actions_for_po(true)
+            .iter()
+            .chain(command_actions_for_config(true).iter())
+        {
+            assert_eq!(
+                action.kind,
+                Some(CodeActionKind::SOURCE),
+                "action '{}' must be SOURCE kind",
+                action.title
+            );
         }
     }
 }

@@ -31,13 +31,22 @@ fn pyproject_maturin_bindings_is_bin() {
 
 #[test]
 fn release_yml_has_version_check_job() {
-    assert!(RELEASE_YML.contains("version-check:"), "must have version-check job");
+    assert!(
+        RELEASE_YML.contains("version-check:"),
+        "must have version-check job"
+    );
 }
 
 #[test]
 fn release_yml_version_check_compares_tag_to_cargo_toml() {
-    assert!(RELEASE_YML.contains("GITHUB_REF_NAME"), "must read tag from GITHUB_REF_NAME");
-    assert!(RELEASE_YML.contains("cargo metadata"), "must read version from cargo metadata");
+    assert!(
+        RELEASE_YML.contains("GITHUB_REF_NAME"),
+        "must read tag from GITHUB_REF_NAME"
+    );
+    assert!(
+        RELEASE_YML.contains("cargo metadata"),
+        "must read version from cargo metadata"
+    );
 }
 
 #[test]
@@ -56,13 +65,22 @@ fn release_yml_build_matrix_has_five_targets() {
 
 #[test]
 fn release_yml_uses_cross_for_aarch64_linux() {
-    assert!(RELEASE_YML.contains("cross: true"), "aarch64-linux must use cross");
-    assert!(RELEASE_YML.contains("cross build"), "must invoke cross for aarch64-linux");
+    assert!(
+        RELEASE_YML.contains("cross: true"),
+        "aarch64-linux must use cross"
+    );
+    assert!(
+        RELEASE_YML.contains("cross build"),
+        "must invoke cross for aarch64-linux"
+    );
 }
 
 #[test]
 fn release_yml_strips_binaries() {
-    assert!(RELEASE_YML.contains("strip target/"), "must strip binaries before upload");
+    assert!(
+        RELEASE_YML.contains("strip target/"),
+        "must strip binaries before upload"
+    );
 }
 
 #[test]
@@ -75,22 +93,46 @@ fn release_yml_packages_zed_extension() {
 
 #[test]
 fn release_yml_publishes_pypi_wheel() {
-    assert!(RELEASE_YML.contains("maturin-action"), "must publish PyPI wheel via maturin");
-    assert!(RELEASE_YML.contains("MATURIN_PYPI_TOKEN"), "must use PYPI_TOKEN secret");
+    assert!(
+        RELEASE_YML.contains("maturin-action"),
+        "must publish PyPI wheel via maturin"
+    );
+    assert!(
+        RELEASE_YML.contains("MATURIN_PYPI_TOKEN"),
+        "must use PYPI_TOKEN secret"
+    );
 }
 
 #[test]
 fn release_yml_updates_aur() {
-    assert!(RELEASE_YML.contains("publish-aur:"), "must have AUR publish job");
-    assert!(RELEASE_YML.contains("aur.archlinux.org"), "must push to AUR");
-    assert!(RELEASE_YML.contains("AUR_SSH_KEY"), "must use AUR_SSH_KEY secret");
+    assert!(
+        RELEASE_YML.contains("publish-aur:"),
+        "must have AUR publish job"
+    );
+    assert!(
+        RELEASE_YML.contains("aur.archlinux.org"),
+        "must push to AUR"
+    );
+    assert!(
+        RELEASE_YML.contains("AUR_SSH_KEY"),
+        "must use AUR_SSH_KEY secret"
+    );
 }
 
 #[test]
 fn release_yml_updates_homebrew() {
-    assert!(RELEASE_YML.contains("publish-homebrew:"), "must have Homebrew publish job");
-    assert!(RELEASE_YML.contains("bump-formula-pr"), "must use brew bump-formula-pr");
-    assert!(RELEASE_YML.contains("HOMEBREW_GITHUB_TOKEN"), "must use HOMEBREW_GITHUB_TOKEN secret");
+    assert!(
+        RELEASE_YML.contains("publish-homebrew:"),
+        "must have Homebrew publish job"
+    );
+    assert!(
+        RELEASE_YML.contains("bump-formula-pr"),
+        "must use brew bump-formula-pr"
+    );
+    assert!(
+        RELEASE_YML.contains("HOMEBREW_GITHUB_TOKEN"),
+        "must use HOMEBREW_GITHUB_TOKEN secret"
+    );
 }
 
 #[test]
@@ -107,11 +149,16 @@ fn release_yml_no_github_context_in_run_commands() {
             continue;
         }
         // Flag any run: script line (not an env assignment) that embeds a github context
-        if (trimmed.contains("${{ github.repository }}") || trimmed.contains("${{ github.ref_name }}"))
+        if (trimmed.contains("${{ github.repository }}")
+            || trimmed.contains("${{ github.ref_name }}"))
             && !trimmed.ends_with(": ${{ github.repository }}")
             && !trimmed.ends_with(": ${{ github.ref_name }}")
         {
-            panic!("Line {}: unsafe github context inline in run: command:\n  {}", i + 1, line);
+            panic!(
+                "Line {}: unsafe github context inline in run: command:\n  {}",
+                i + 1,
+                line
+            );
         }
     }
 }
@@ -120,20 +167,32 @@ fn release_yml_no_github_context_in_run_commands() {
 
 #[test]
 fn zed_package_script_has_bash_shebang() {
-    assert!(PKG_SCRIPT.starts_with("#!/usr/bin/env bash"), "script must use bash");
+    assert!(
+        PKG_SCRIPT.starts_with("#!/usr/bin/env bash"),
+        "script must use bash"
+    );
 }
 
 #[test]
 fn zed_package_script_targets_wasip2() {
-    assert!(PKG_SCRIPT.contains("wasm32-wasip2"), "must build for wasm32-wasip2");
+    assert!(
+        PKG_SCRIPT.contains("wasm32-wasip2"),
+        "must build for wasm32-wasip2"
+    );
 }
 
 #[test]
 fn zed_package_script_packages_extension_toml() {
-    assert!(PKG_SCRIPT.contains("extension.toml"), "must include extension.toml");
+    assert!(
+        PKG_SCRIPT.contains("extension.toml"),
+        "must include extension.toml"
+    );
 }
 
 #[test]
 fn zed_package_script_packages_wasm_binary() {
-    assert!(PKG_SCRIPT.contains("extension.wasm"), "must include extension.wasm in zip");
+    assert!(
+        PKG_SCRIPT.contains("extension.wasm"),
+        "must include extension.wasm in zip"
+    );
 }

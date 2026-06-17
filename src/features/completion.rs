@@ -83,7 +83,12 @@ pub fn complete(
     .collect()
 }
 
-fn build_item(key: &CatalogKey, index: &CatalogIndex, prefix_range: Range, sort_index: usize) -> CompletionItem {
+fn build_item(
+    key: &CatalogKey,
+    index: &CatalogIndex,
+    prefix_range: Range,
+    sort_index: usize,
+) -> CompletionItem {
     let mut entries: Vec<_> = index.lookup(key).iter().collect();
 
     // Sort deterministically by locale then domain before any use.
@@ -141,10 +146,14 @@ fn build_item(key: &CatalogKey, index: &CatalogIndex, prefix_range: Range, sort_
     }
 }
 
-
 /// Like `build_item` but skips building the documentation table. Used when the
 /// typed prefix is very short (< 2 chars) to avoid expensive O(N) work.
-fn build_item_no_docs(key: &CatalogKey, index: &CatalogIndex, prefix_range: Range, sort_index: usize) -> CompletionItem {
+fn build_item_no_docs(
+    key: &CatalogKey,
+    index: &CatalogIndex,
+    prefix_range: Range,
+    sort_index: usize,
+) -> CompletionItem {
     let mut entries: Vec<_> = index.lookup(key).iter().collect();
     entries.sort_by(|a, b| a.locale.cmp(&b.locale).then(a.domain.cmp(&b.domain)));
 
@@ -190,10 +199,7 @@ fn string_prefix(
     }
 
     // Text from the start of the string node up to the cursor.
-    let head: String = rope
-        .slice(start_offset..cursor_offset)
-        .chars()
-        .collect();
+    let head: String = rope.slice(start_offset..cursor_offset).chars().collect();
 
     // Skip any string prefix characters (r, u, b and their upper-case forms).
     let mut skip = 0usize;
@@ -230,8 +236,7 @@ fn string_prefix(
     // Calculate the LSP position right after the opening quote(s).
     let content_byte_start = skip + quote_byte_len;
     let content_char_start = head[..content_byte_start].chars().count();
-    let content_lsp_start =
-        char_offset_to_lsp_pos(rope, start_offset + content_char_start, enc);
+    let content_lsp_start = char_offset_to_lsp_pos(rope, start_offset + content_char_start, enc);
 
     Some((content, content_lsp_start))
 }
@@ -285,7 +290,12 @@ mod tests {
     }
 
     /// Call complete() for a Python source at the given (0-based) line/character.
-    fn complete_at(src: &str, line: u32, character: u32, index: &CatalogIndex) -> Vec<CompletionItem> {
+    fn complete_at(
+        src: &str,
+        line: u32,
+        character: u32,
+        index: &CatalogIndex,
+    ) -> Vec<CompletionItem> {
         let rope = Rope::from_str(src);
         let calls = python::extract(src.as_bytes(), &no_extra());
         complete(
@@ -360,7 +370,7 @@ mod tests {
     #[test]
     fn req_cpl_04_prefers_msgctxt_in_pgettext() {
         let index = CatalogIndex::build(vec![
-            entry("de", "Save", "Speichern"),          // plain key
+            entry("de", "Save", "Speichern"),                  // plain key
             entry_with_ctx("de", "Save", "button", "Sichern"), // context key
         ]);
 
@@ -392,9 +402,21 @@ mod tests {
             _ => panic!("expected Edit"),
         };
         // start = right after the opening `"` (col 2), so col 3
-        assert_eq!(edit.range.start, Position { line: 0, character: 3 });
+        assert_eq!(
+            edit.range.start,
+            Position {
+                line: 0,
+                character: 3
+            }
+        );
         // end = cursor position (col 5)
-        assert_eq!(edit.range.end, Position { line: 0, character: 5 });
+        assert_eq!(
+            edit.range.end,
+            Position {
+                line: 0,
+                character: 5
+            }
+        );
         assert_eq!(edit.new_text, "Checkout");
     }
 
@@ -407,15 +429,24 @@ mod tests {
         let checkout = items.iter().find(|i| i.label == "Checkout").unwrap();
 
         // Two locales → markdown table in documentation.
-        let doc = checkout.documentation.as_ref().expect("documentation present");
+        let doc = checkout
+            .documentation
+            .as_ref()
+            .expect("documentation present");
         let markdown = match doc {
             Documentation::MarkupContent(mc) => &mc.value,
             _ => panic!("expected MarkupContent"),
         };
-        assert!(markdown.contains("| Locale | Translation |"), "table header missing");
+        assert!(
+            markdown.contains("| Locale | Translation |"),
+            "table header missing"
+        );
         assert!(markdown.contains("de"), "de locale missing");
         assert!(markdown.contains("fr"), "fr locale missing");
-        assert!(markdown.contains("_(untranslated)_"), "untranslated marker missing");
+        assert!(
+            markdown.contains("_(untranslated)_"),
+            "untranslated marker missing"
+        );
     }
 
     #[test]
@@ -432,34 +463,89 @@ mod tests {
     #[test]
     fn string_prefix_triple_quote() {
         let rope = Rope::from_str(r#""""Checkout""""#);
-        let start = Position { line: 0, character: 0 };
-        let cursor = Position { line: 0, character: 6 };
-        let (prefix, prefix_start) = string_prefix(&rope, start, cursor, PositionEncoding::Utf16).unwrap();
+        let start = Position {
+            line: 0,
+            character: 0,
+        };
+        let cursor = Position {
+            line: 0,
+            character: 6,
+        };
+        let (prefix, prefix_start) =
+            string_prefix(&rope, start, cursor, PositionEncoding::Utf16).unwrap();
         assert_eq!(prefix, "Che");
-        assert_eq!(prefix_start, Position { line: 0, character: 3 });
+        assert_eq!(
+            prefix_start,
+            Position {
+                line: 0,
+                character: 3
+            }
+        );
     }
 
     #[test]
     fn string_prefix_with_r_prefix() {
         let rope = Rope::from_str(r#"r"Checkout""#);
-        let start = Position { line: 0, character: 0 };
-        let cursor = Position { line: 0, character: 5 };
+        let start = Position {
+            line: 0,
+            character: 0,
+        };
+        let cursor = Position {
+            line: 0,
+            character: 5,
+        };
         let (prefix, prefix_start) =
             string_prefix(&rope, start, cursor, PositionEncoding::Utf16).unwrap();
         assert_eq!(prefix, "Che");
-        assert_eq!(prefix_start, Position { line: 0, character: 2 }); // after r"
+        assert_eq!(
+            prefix_start,
+            Position {
+                line: 0,
+                character: 2
+            }
+        ); // after r"
     }
 
     #[test]
     fn pos_in_range_basic() {
         let range = Range {
-            start: Position { line: 0, character: 3 },
-            end: Position { line: 0, character: 10 },
+            start: Position {
+                line: 0,
+                character: 3,
+            },
+            end: Position {
+                line: 0,
+                character: 10,
+            },
         };
-        assert!(pos_in_range(Position { line: 0, character: 3 }, range));
-        assert!(pos_in_range(Position { line: 0, character: 7 }, range));
-        assert!(!pos_in_range(Position { line: 0, character: 10 }, range)); // exclusive end
-        assert!(!pos_in_range(Position { line: 0, character: 2 }, range));
+        assert!(pos_in_range(
+            Position {
+                line: 0,
+                character: 3
+            },
+            range
+        ));
+        assert!(pos_in_range(
+            Position {
+                line: 0,
+                character: 7
+            },
+            range
+        ));
+        assert!(!pos_in_range(
+            Position {
+                line: 0,
+                character: 10
+            },
+            range
+        )); // exclusive end
+        assert!(!pos_in_range(
+            Position {
+                line: 0,
+                character: 2
+            },
+            range
+        ));
     }
 
     // ── babel-lsp-6ke: closing quote must not be included in prefix ───────────
@@ -469,8 +555,14 @@ mod tests {
         // Cursor is positioned one past the closing quote (col 11 in `"Checkout"`).
         // The prefix must be "Checkout" without the closing `"`.
         let rope = Rope::from_str(r#""Checkout""#);
-        let start = Position { line: 0, character: 0 };
-        let cursor = Position { line: 0, character: 10 }; // past the closing `"`
+        let start = Position {
+            line: 0,
+            character: 0,
+        };
+        let cursor = Position {
+            line: 0,
+            character: 10,
+        }; // past the closing `"`
         let (prefix, _) = string_prefix(&rope, start, cursor, PositionEncoding::Utf16).unwrap();
         assert_eq!(prefix, "Checkout");
     }
@@ -488,7 +580,11 @@ mod tests {
         // Cursor right after opening quote → empty prefix.
         let items = complete_at(r#"_("")"#, 0, 3, &index);
 
-        assert!(items.len() <= 100, "expected at most 100 items, got {}", items.len());
+        assert!(
+            items.len() <= 100,
+            "expected at most 100 items, got {}",
+            items.len()
+        );
         for item in &items {
             assert!(
                 item.documentation.is_none(),

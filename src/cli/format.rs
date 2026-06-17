@@ -92,7 +92,9 @@ fn rule_url(code: &str) -> String {
 }
 
 fn read_file_lines(path: &Path) -> Vec<String> {
-    let Ok(mut f) = std::fs::File::open(path) else { return vec![] };
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return vec![];
+    };
     let mut s = String::new();
     let _ = f.read_to_string(&mut s);
     s.lines().map(str::to_owned).collect()
@@ -138,12 +140,7 @@ fn render_full(findings: &[Finding], color: &ColorConfig, root: &Path) -> String
         // Show context: one line before (if available) + the finding line.
         if f.line >= 2 {
             if let Some(ctx) = lines.get((f.line - 2) as usize) {
-                out.push_str(&format!(
-                    "{:>4} {} {}\n",
-                    f.line - 1,
-                    color.dim("|"),
-                    ctx
-                ));
+                out.push_str(&format!("{:>4} {} {}\n", f.line - 1, color.dim("|"), ctx));
             }
         }
         if let Some(src_line) = lines.get((f.line - 1) as usize) {
@@ -158,7 +155,12 @@ fn render_full(findings: &[Finding], color: &ColorConfig, root: &Path) -> String
                 src_line.chars().count().saturating_sub(col_chars).max(1)
             };
             let carets = "^".repeat(width);
-            out.push_str(&format!("   {} {}{}\n", color.dim("|"), indent, color.severity(f.severity, &carets)));
+            out.push_str(&format!(
+                "   {} {}{}\n",
+                color.dim("|"),
+                indent,
+                color.severity(f.severity, &carets)
+            ));
         }
         out.push_str(&format!("   {}\n", color.dim("|")));
         out.push_str(&format!("{} {}\n", color.cyan("help:"), f.message));
@@ -194,7 +196,10 @@ fn render_json(findings: &[Finding], root: &Path) -> String {
     if findings.is_empty() {
         return "[]\n".to_string();
     }
-    let items: Vec<_> = findings.iter().map(|f| finding_to_json_obj(f, root)).collect();
+    let items: Vec<_> = findings
+        .iter()
+        .map(|f| finding_to_json_obj(f, root))
+        .collect();
     format!("[\n{}\n]\n", items.join(",\n"))
 }
 
@@ -243,7 +248,9 @@ fn render_gitlab(findings: &[Finding], root: &Path) -> String {
     }
     let mut items = String::new();
     for (i, f) in findings.iter().enumerate() {
-        if i > 0 { items.push_str(",\n"); }
+        if i > 0 {
+            items.push_str(",\n");
+        }
         let path = escape_json_str(&display_path(&f.path, root));
         let code = escape_json_str(&f.code);
         let message = escape_json_str(&f.message);
@@ -306,7 +313,11 @@ fn render_grouped(findings: &[Finding], color: &ColorConfig, root: &Path) -> Str
         for f in file_findings {
             let loc = format!("  {}:{}", f.line, f.col);
             let code_msg = format!("{} {}", f.code, f.message);
-            out.push_str(&format!("{} {}\n", color.dim(&loc), color.severity(f.severity, &code_msg)));
+            out.push_str(&format!(
+                "{} {}\n",
+                color.dim(&loc),
+                color.severity(f.severity, &code_msg)
+            ));
         }
         out.push('\n');
     }
@@ -334,7 +345,14 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn finding(path: &str, line: u32, col: u32, code: &str, msg: &str, sev: DiagnosticSeverity) -> Finding {
+    fn finding(
+        path: &str,
+        line: u32,
+        col: u32,
+        code: &str,
+        msg: &str,
+        sev: DiagnosticSeverity,
+    ) -> Finding {
         Finding {
             path: PathBuf::from(path),
             line,
@@ -357,16 +375,36 @@ mod tests {
 
     #[test]
     fn concise_format() {
-        let f = finding("/workspace/locale/de/messages.po", 14, 9, "po/format-mismatch", "placeholder missing", DiagnosticSeverity::WARNING);
+        let f = finding(
+            "/workspace/locale/de/messages.po",
+            14,
+            9,
+            "po/format-mismatch",
+            "placeholder missing",
+            DiagnosticSeverity::WARNING,
+        );
         let out = render_concise(&[f], &no_color(), &root());
-        assert_eq!(out, "locale/de/messages.po:14:9: po/format-mismatch placeholder missing\n");
+        assert_eq!(
+            out,
+            "locale/de/messages.po:14:9: po/format-mismatch placeholder missing\n"
+        );
     }
 
     #[test]
     fn pylint_format() {
-        let f = finding("/workspace/locale/de/messages.po", 14, 9, "po/format-mismatch", "placeholder missing", DiagnosticSeverity::WARNING);
+        let f = finding(
+            "/workspace/locale/de/messages.po",
+            14,
+            9,
+            "po/format-mismatch",
+            "placeholder missing",
+            DiagnosticSeverity::WARNING,
+        );
         let out = render_pylint(&[f], &root());
-        assert_eq!(out, "locale/de/messages.po:14: [po/format-mismatch] placeholder missing\n");
+        assert_eq!(
+            out,
+            "locale/de/messages.po:14: [po/format-mismatch] placeholder missing\n"
+        );
     }
 
     #[test]
@@ -377,7 +415,14 @@ mod tests {
 
     #[test]
     fn json_has_required_fields() {
-        let f = finding("/workspace/locale/de/messages.po", 14, 9, "po/format-mismatch", "placeholder missing", DiagnosticSeverity::WARNING);
+        let f = finding(
+            "/workspace/locale/de/messages.po",
+            14,
+            9,
+            "po/format-mismatch",
+            "placeholder missing",
+            DiagnosticSeverity::WARNING,
+        );
         let out = render_json(&[f], &root());
         assert!(out.contains("\"code\": \"po/format-mismatch\""));
         assert!(out.contains("\"row\": 14"));
@@ -387,8 +432,22 @@ mod tests {
 
     #[test]
     fn json_lines_one_object_per_line() {
-        let f1 = finding("/workspace/a.po", 1, 1, "po/fuzzy", "fuzzy", DiagnosticSeverity::INFORMATION);
-        let f2 = finding("/workspace/b.po", 2, 1, "po/fuzzy", "fuzzy", DiagnosticSeverity::INFORMATION);
+        let f1 = finding(
+            "/workspace/a.po",
+            1,
+            1,
+            "po/fuzzy",
+            "fuzzy",
+            DiagnosticSeverity::INFORMATION,
+        );
+        let f2 = finding(
+            "/workspace/b.po",
+            2,
+            1,
+            "po/fuzzy",
+            "fuzzy",
+            DiagnosticSeverity::INFORMATION,
+        );
         let out = render_json_lines(&[f1, f2], &root());
         let lines: Vec<_> = out.lines().collect();
         assert_eq!(lines.len(), 2);
@@ -398,7 +457,14 @@ mod tests {
 
     #[test]
     fn github_format_uses_workflow_commands() {
-        let f = finding("/workspace/locale/de/messages.po", 14, 9, "po/format-mismatch", "placeholder missing", DiagnosticSeverity::WARNING);
+        let f = finding(
+            "/workspace/locale/de/messages.po",
+            14,
+            9,
+            "po/format-mismatch",
+            "placeholder missing",
+            DiagnosticSeverity::WARNING,
+        );
         let out = render_github(&[f], &root());
         assert!(out.starts_with("::warning "));
         assert!(out.contains("file=locale/de/messages.po"));
@@ -407,7 +473,14 @@ mod tests {
 
     #[test]
     fn github_error_uses_error_level() {
-        let f = finding("/workspace/a.po", 1, 1, "po/duplicate-id", "dup", DiagnosticSeverity::ERROR);
+        let f = finding(
+            "/workspace/a.po",
+            1,
+            1,
+            "po/duplicate-id",
+            "dup",
+            DiagnosticSeverity::ERROR,
+        );
         let out = render_github(&[f], &root());
         assert!(out.starts_with("::error "));
     }
@@ -420,7 +493,14 @@ mod tests {
 
     #[test]
     fn gitlab_has_fingerprint_and_severity() {
-        let f = finding("/workspace/locale/de/messages.po", 14, 9, "po/format-mismatch", "placeholder missing", DiagnosticSeverity::WARNING);
+        let f = finding(
+            "/workspace/locale/de/messages.po",
+            14,
+            9,
+            "po/format-mismatch",
+            "placeholder missing",
+            DiagnosticSeverity::WARNING,
+        );
         let out = render_gitlab(&[f], &root());
         assert!(out.contains("\"check_name\": \"po/format-mismatch\""));
         assert!(out.contains("\"severity\": \"minor\""));
@@ -429,7 +509,14 @@ mod tests {
 
     #[test]
     fn junit_well_formed_xml() {
-        let f = finding("/workspace/locale/de/messages.po", 14, 9, "po/format-mismatch", "placeholder missing", DiagnosticSeverity::WARNING);
+        let f = finding(
+            "/workspace/locale/de/messages.po",
+            14,
+            9,
+            "po/format-mismatch",
+            "placeholder missing",
+            DiagnosticSeverity::WARNING,
+        );
         let out = render_junit(&[f], &root());
         assert!(out.contains("<?xml version=\"1.0\""));
         assert!(out.contains("<testsuites>"));
@@ -445,9 +532,30 @@ mod tests {
 
     #[test]
     fn grouped_format_groups_by_file() {
-        let f1 = finding("/workspace/a.po", 1, 1, "po/fuzzy", "fuzzy", DiagnosticSeverity::INFORMATION);
-        let f2 = finding("/workspace/a.po", 5, 1, "po/missing-translation", "missing", DiagnosticSeverity::INFORMATION);
-        let f3 = finding("/workspace/b.po", 3, 1, "po/fuzzy", "fuzzy", DiagnosticSeverity::INFORMATION);
+        let f1 = finding(
+            "/workspace/a.po",
+            1,
+            1,
+            "po/fuzzy",
+            "fuzzy",
+            DiagnosticSeverity::INFORMATION,
+        );
+        let f2 = finding(
+            "/workspace/a.po",
+            5,
+            1,
+            "po/missing-translation",
+            "missing",
+            DiagnosticSeverity::INFORMATION,
+        );
+        let f3 = finding(
+            "/workspace/b.po",
+            3,
+            1,
+            "po/fuzzy",
+            "fuzzy",
+            DiagnosticSeverity::INFORMATION,
+        );
         let out = render_grouped(&[f1, f2, f3], &no_color(), &root());
         // a.po header appears before b.po header
         let a_pos = out.find("a.po").unwrap();

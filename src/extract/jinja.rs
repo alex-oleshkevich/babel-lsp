@@ -130,8 +130,7 @@ fn collect_jinja_slots(node: Node, source: &[u8]) -> Vec<Option<SlotValue>> {
     node.children_by_field_name("positional_argument", &mut cursor)
         .map(|arg| {
             if arg.kind() == "string" {
-                strip_jinja_string(arg, source)
-                    .map(|s| SlotValue::Resolved(s, node_range(arg)))
+                strip_jinja_string(arg, source).map(|s| SlotValue::Resolved(s, node_range(arg)))
             } else {
                 Some(SlotValue::Unresolved(node_range(arg)))
             }
@@ -159,14 +158,13 @@ fn build_call(node: Node, func: TranslationFunc, slots: Vec<Option<SlotValue>>) 
             })
         })
         .flatten();
-    let (msgid, msgid_range, unresolved_reason, unresolved_arg_range) =
-        match it.next().flatten() {
-            Some(SlotValue::Resolved(s, r)) => (Some(s), Some(r), None, None),
-            Some(SlotValue::Unresolved(r)) => {
-                (None, None, Some(UnresolvedReason::NonConstant), Some(r))
-            }
-            None => (None, None, None, None),
-        };
+    let (msgid, msgid_range, unresolved_reason, unresolved_arg_range) = match it.next().flatten() {
+        Some(SlotValue::Resolved(s, r)) => (Some(s), Some(r), None, None),
+        Some(SlotValue::Unresolved(r)) => {
+            (None, None, Some(UnresolvedReason::NonConstant), Some(r))
+        }
+        None => (None, None, None, None),
+    };
     let msgid_plural = func
         .has_plural()
         .then(|| {
@@ -458,7 +456,10 @@ mod tests {
     fn req_ext_12_variable_arg_sets_unresolved_reason() {
         use super::super::types::UnresolvedReason;
         let calls = ex("{{ _(label) }}");
-        assert_eq!(calls[0].unresolved_reason, Some(UnresolvedReason::NonConstant));
+        assert_eq!(
+            calls[0].unresolved_reason,
+            Some(UnresolvedReason::NonConstant)
+        );
         assert!(calls[0].unresolved_arg_range.is_some());
     }
 

@@ -14,7 +14,10 @@ use walkdir::WalkDir;
 use crate::catalog::index::CatalogIndex;
 use crate::catalog::loader::{load_po_file, load_po_from_str, locale_domain_from_po_path};
 use crate::config::{Config, discover_locale_dirs, resolve_config};
-use crate::features::{code_action, code_lens, completion, definition, diagnostics, document_link, document_symbol, hardcoded, hover, inlay_hint, pybabel, references, rename};
+use crate::features::{
+    code_action, code_lens, completion, definition, diagnostics, document_link, document_symbol,
+    hardcoded, hover, inlay_hint, pybabel, references, rename,
+};
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
@@ -211,10 +214,7 @@ impl LanguageServer for Backend {
         });
     }
 
-    async fn completion(
-        &self,
-        params: CompletionParams,
-    ) -> Result<Option<CompletionResponse>> {
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let pos = params.text_document_position.position;
         let enc = if self.state.is_utf8_encoding() {
@@ -317,7 +317,8 @@ impl LanguageServer for Backend {
                 .iter()
                 .find(|c| {
                     c.msgid.is_some()
-                        && c.msgid_range.is_some_and(|r| crate::util::pos_in_range(pos, r))
+                        && c.msgid_range
+                            .is_some_and(|r| crate::util::pos_in_range(pos, r))
                 })
                 .map(|c| crate::catalog::index::CatalogKey {
                     msgid: c.msgid.clone().unwrap_or_default(),
@@ -345,10 +346,8 @@ impl LanguageServer for Backend {
 
         // Workspace scan (REQ-NAV-06).
         if let Some(root) = self.state.workspace_root.get() {
-            let open_uris: std::collections::HashSet<String> = call_sites
-                .iter()
-                .map(|(u, _)| u.to_string())
-                .collect();
+            let open_uris: std::collections::HashSet<String> =
+                call_sites.iter().map(|(u, _)| u.to_string()).collect();
             let jinja_exts: Vec<String> = config.jinja_extensions.clone();
             let root = root.clone();
             let extra = extra_keywords(&config);
@@ -407,7 +406,9 @@ impl LanguageServer for Backend {
         drop(doc);
 
         let config = self.state.config.read().await;
-        let Some(locale) = config.inlay_hint_locale.clone() else { return Ok(None) };
+        let Some(locale) = config.inlay_hint_locale.clone() else {
+            return Ok(None);
+        };
         let calls = extract_calls(&text, &uri, &config);
         drop(config);
 
@@ -424,7 +425,9 @@ impl LanguageServer for Backend {
         if !is_catalog_uri(&uri) {
             return Ok(None);
         }
-        let Some(path) = uri.to_file_path() else { return Ok(None) };
+        let Some(path) = uri.to_file_path() else {
+            return Ok(None);
+        };
         let index = self.state.catalog_index.read().await;
         let entries = index.entries_for_file(&path);
         let symbols = document_symbol::document_symbols(&entries);
@@ -448,16 +451,13 @@ impl LanguageServer for Backend {
         })
     }
 
-    async fn code_action(
-        &self,
-        params: CodeActionParams,
-    ) -> Result<Option<CodeActionResponse>> {
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri.clone();
         let is_catalog = is_catalog_uri(&uri);
         let is_config = is_config_uri(&uri);
-        let has_hardcoded_diag = params.context.diagnostics.iter().any(|d| {
-            matches!(&d.code, Some(NumberOrString::String(s)) if s == "msg/hardcoded-string")
-        });
+        let has_hardcoded_diag = params.context.diagnostics.iter().any(
+            |d| matches!(&d.code, Some(NumberOrString::String(s)) if s == "msg/hardcoded-string"),
+        );
 
         if !is_catalog && !is_config && !has_hardcoded_diag {
             return Ok(None);
@@ -483,14 +483,19 @@ impl LanguageServer for Backend {
             drop(config);
 
             let source = {
-                let Some(doc) = self.state.documents.get(&uri) else { return Ok(None) };
+                let Some(doc) = self.state.documents.get(&uri) else {
+                    return Ok(None);
+                };
                 doc.rope.to_string()
             };
 
             let index = self.state.catalog_index.read().await;
             let pot_path = index.pot_file_path().map(|p| p.to_path_buf());
-            let po_paths: Vec<PathBuf> =
-                index.po_file_paths().into_iter().map(|p| p.to_path_buf()).collect();
+            let po_paths: Vec<PathBuf> = index
+                .po_file_paths()
+                .into_iter()
+                .map(|p| p.to_path_buf())
+                .collect();
 
             let pot_info: Option<(Uri, String)> = pot_path.as_ref().and_then(|path| {
                 let pot_uri = Uri::from_file_path(path)?;
@@ -517,8 +522,10 @@ impl LanguageServer for Backend {
                 })
                 .collect();
 
-            let locale_po_refs: Vec<(&Uri, &str)> =
-                locale_po_contents.iter().map(|(u, c)| (u, c.as_str())).collect();
+            let locale_po_refs: Vec<(&Uri, &str)> = locale_po_contents
+                .iter()
+                .map(|(u, c)| (u, c.as_str()))
+                .collect();
 
             let actions = hardcoded::code_actions_for_hardcoded(
                 &params.context.diagnostics,
@@ -535,7 +542,10 @@ impl LanguageServer for Backend {
                 return Ok(None);
             }
             return Ok(Some(
-                actions.into_iter().map(CodeActionOrCommand::CodeAction).collect(),
+                actions
+                    .into_iter()
+                    .map(CodeActionOrCommand::CodeAction)
+                    .collect(),
             ));
         }
 
@@ -555,17 +565,21 @@ impl LanguageServer for Backend {
             let content = doc.rope.to_string();
             drop(doc);
 
-            let Some(path) = uri.to_file_path() else { return Ok(None) };
+            let Some(path) = uri.to_file_path() else {
+                return Ok(None);
+            };
             let index = self.state.catalog_index.read().await;
             let entries = index.entries_for_file(&path);
-            let mut actions =
-                code_action::code_actions_for_po(&params, &content, &entries, &uri);
+            let mut actions = code_action::code_actions_for_po(&params, &content, &entries, &uri);
             actions.extend(code_action::command_actions_for_po(has_locale_dirs));
             if actions.is_empty() {
                 return Ok(None);
             }
             return Ok(Some(
-                actions.into_iter().map(CodeActionOrCommand::CodeAction).collect(),
+                actions
+                    .into_iter()
+                    .map(CodeActionOrCommand::CodeAction)
+                    .collect(),
             ));
         }
 
@@ -575,7 +589,10 @@ impl LanguageServer for Backend {
                 return Ok(None);
             }
             return Ok(Some(
-                actions.into_iter().map(CodeActionOrCommand::CodeAction).collect(),
+                actions
+                    .into_iter()
+                    .map(CodeActionOrCommand::CodeAction)
+                    .collect(),
             ));
         }
 
@@ -591,7 +608,9 @@ impl LanguageServer for Backend {
         drop(doc);
 
         let lenses = if is_catalog_uri(&uri) {
-            let Some(path) = uri.to_file_path() else { return Ok(None) };
+            let Some(path) = uri.to_file_path() else {
+                return Ok(None);
+            };
             let index = self.state.catalog_index.read().await;
             let entries = index.entries_for_file(&path);
             code_lens::code_lenses_catalog(&text, &entries)
@@ -602,7 +621,11 @@ impl LanguageServer for Backend {
             code_lens::code_lenses_source(&calls)
         };
 
-        Ok(if lenses.is_empty() { None } else { Some(lenses) })
+        Ok(if lenses.is_empty() {
+            None
+        } else {
+            Some(lenses)
+        })
     }
 
     async fn code_lens_resolve(&self, lens: CodeLens) -> Result<CodeLens> {
@@ -648,8 +671,12 @@ impl LanguageServer for Backend {
         let pos = params.position;
 
         if is_catalog_uri(uri) {
-            let Some(path) = uri.to_file_path() else { return Ok(None) };
-            let Some(doc) = self.state.documents.get(uri) else { return Ok(None) };
+            let Some(path) = uri.to_file_path() else {
+                return Ok(None);
+            };
+            let Some(doc) = self.state.documents.get(uri) else {
+                return Ok(None);
+            };
             let content = doc.rope.to_string();
             drop(doc);
             let lines: Vec<&str> = content.lines().collect();
@@ -659,7 +686,9 @@ impl LanguageServer for Backend {
             drop(index);
             Ok(result.map(|(range, _)| PrepareRenameResponse::Range(range)))
         } else {
-            let Some(doc) = self.state.documents.get(uri) else { return Ok(None) };
+            let Some(doc) = self.state.documents.get(uri) else {
+                return Ok(None);
+            };
             let content = doc.rope.to_string();
             drop(doc);
             let config = self.state.config.read().await;
@@ -677,8 +706,12 @@ impl LanguageServer for Backend {
 
         // Resolve the CatalogKey from the cursor position.
         let key = if is_catalog_uri(uri) {
-            let Some(path) = uri.to_file_path() else { return Ok(None) };
-            let Some(doc) = self.state.documents.get(uri) else { return Ok(None) };
+            let Some(path) = uri.to_file_path() else {
+                return Ok(None);
+            };
+            let Some(doc) = self.state.documents.get(uri) else {
+                return Ok(None);
+            };
             let content = doc.rope.to_string();
             drop(doc);
             let lines: Vec<&str> = content.lines().collect();
@@ -688,7 +721,9 @@ impl LanguageServer for Backend {
             drop(index);
             key
         } else {
-            let Some(doc) = self.state.documents.get(uri) else { return Ok(None) };
+            let Some(doc) = self.state.documents.get(uri) else {
+                return Ok(None);
+            };
             let content = doc.rope.to_string();
             drop(doc);
             let config = self.state.config.read().await;
@@ -738,7 +773,9 @@ impl LanguageServer for Backend {
         let mut call_sites: Vec<(Uri, Vec<crate::extract::types::TranslationCall>)> = Vec::new();
         for entry in self.state.documents.iter() {
             let doc_uri = entry.key().clone();
-            if is_catalog_uri(&doc_uri) { continue; }
+            if is_catalog_uri(&doc_uri) {
+                continue;
+            }
             let text = entry.value().rope.to_string();
             let calls = extract_calls(&text, &doc_uri, &config);
             if !calls.is_empty() {
@@ -754,8 +791,7 @@ impl LanguageServer for Backend {
                 .extra_keywords
                 .iter()
                 .filter_map(|kw| {
-                    crate::extract::types::TranslationFunc::from_name(kw)
-                        .map(|f| (kw.clone(), f))
+                    crate::extract::types::TranslationFunc::from_name(kw).map(|f| (kw.clone(), f))
                 })
                 .collect::<std::collections::HashMap<_, _>>();
             drop(config);
@@ -1090,7 +1126,9 @@ async fn publish_diagnostics_after_rebuild(state: &Arc<WorkspaceState>, client: 
         .iter()
         .filter_map(|entry| {
             let uri = entry.key().clone();
-            if is_catalog_uri(&uri) { return None; }
+            if is_catalog_uri(&uri) {
+                return None;
+            }
             Some((uri, entry.value().rope.to_string()))
         })
         .collect();
@@ -1110,7 +1148,9 @@ async fn publish_diagnostics_after_rebuild(state: &Arc<WorkspaceState>, client: 
         }
     }
     for disk_path in &catalog_files {
-        let Some(uri) = Uri::from_file_path(disk_path) else { continue };
+        let Some(uri) = Uri::from_file_path(disk_path) else {
+            continue;
+        };
         let file_entries = index.entries_for_file(disk_path);
         catalog_diags
             .entry(uri.clone())
@@ -1134,7 +1174,9 @@ async fn publish_diagnostics_after_rebuild(state: &Arc<WorkspaceState>, client: 
             diags.extend(hardcoded::check_source(text.as_bytes(), uri, &extra));
         }
         let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
-        client.publish_diagnostics(uri.clone(), filtered, None).await;
+        client
+            .publish_diagnostics(uri.clone(), filtered, None)
+            .await;
     }
 
     // REQ-HINT-05: tell the client to re-request inlay hints for all open files.
@@ -1166,8 +1208,10 @@ async fn collect_all_source_calls(
         return calls;
     };
 
-    let skip_uris: std::collections::HashSet<String> =
-        open_sources.iter().map(|(uri, _)| uri.to_string()).collect();
+    let skip_uris: std::collections::HashSet<String> = open_sources
+        .iter()
+        .map(|(uri, _)| uri.to_string())
+        .collect();
     let extra: std::collections::HashMap<String, crate::extract::types::TranslationFunc> = config
         .extra_keywords
         .iter()
@@ -1220,8 +1264,7 @@ fn extract_calls(
         .extra_keywords
         .iter()
         .filter_map(|kw| {
-            crate::extract::types::TranslationFunc::from_name(kw)
-                .map(|f| (kw.clone(), f))
+            crate::extract::types::TranslationFunc::from_name(kw).map(|f| (kw.clone(), f))
         })
         .collect::<std::collections::HashMap<_, _>>();
 
@@ -1452,7 +1495,13 @@ fn scan_workspace_for_calls(
     skip_uris: &std::collections::HashSet<String>,
 ) -> Vec<(Uri, Vec<crate::extract::types::TranslationCall>)> {
     const PRUNE: &[&str] = &[
-        ".git", "target", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
+        ".git",
+        "target",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
     ];
 
     let mut results = Vec::new();
@@ -1484,12 +1533,16 @@ fn scan_workspace_for_calls(
             continue;
         }
 
-        let Some(uri) = Uri::from_file_path(path) else { continue };
+        let Some(uri) = Uri::from_file_path(path) else {
+            continue;
+        };
         if skip_uris.contains(&uri.to_string()) {
             continue; // already covered by an open document
         }
 
-        let Ok(bytes) = std::fs::read(path) else { continue };
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
         let calls = if is_py {
             crate::extract::python::extract(&bytes, extra)
         } else {
@@ -1774,12 +1827,14 @@ mod tests {
             },
         );
         rebuild_catalog_index(&state).await;
-        assert!(!state
-            .catalog_index
-            .read()
-            .await
-            .lookup(&CatalogKey::new("Buffer Msg"))
-            .is_empty());
+        assert!(
+            !state
+                .catalog_index
+                .read()
+                .await
+                .lookup(&CatalogKey::new("Buffer Msg"))
+                .is_empty()
+        );
 
         state.documents.remove(&make_uri(&po));
         rebuild_catalog_index(&state).await;
@@ -2045,8 +2100,14 @@ mod tests {
     fn req_cpl_02_advertises_quote_trigger_characters() {
         let opts = completion_provider_options();
         let triggers = opts.trigger_characters.as_deref().unwrap_or_default();
-        assert!(triggers.contains(&"\"".to_string()), "double-quote trigger missing");
-        assert!(triggers.contains(&"'".to_string()), "single-quote trigger missing");
+        assert!(
+            triggers.contains(&"\"".to_string()),
+            "double-quote trigger missing"
+        );
+        assert!(
+            triggers.contains(&"'".to_string()),
+            "single-quote trigger missing"
+        );
     }
 
     // ── REQ-CMD-03: is_config_uri ─────────────────────────────────────────────
@@ -2060,6 +2121,8 @@ mod tests {
         assert!(is_config_uri(&pyproject));
         assert!(!is_config_uri(&unrelated));
         // Catalog files are not config files.
-        assert!(!is_config_uri(&Uri::from_file_path("/locale/de/messages.po").unwrap()));
+        assert!(!is_config_uri(
+            &Uri::from_file_path("/locale/de/messages.po").unwrap()
+        ));
     }
 }

@@ -52,7 +52,10 @@ pub fn code_lenses_catalog(source: &str, entries: &[&CatalogEntry]) -> Vec<CodeL
             locale,
         };
         lenses.push(CodeLens {
-            range: Range { start: pos, end: pos },
+            range: Range {
+                start: pos,
+                end: pos,
+            },
             command: None,
             data: serde_json::to_value(&data).ok(),
         });
@@ -181,7 +184,10 @@ mod tests {
             } else {
                 vec![]
             },
-            flags: EntryFlags { fuzzy, obsolete: false },
+            flags: EntryFlags {
+                fuzzy,
+                obsolete: false,
+            },
             file_path: PathBuf::from(format!("locale/{locale}/LC_MESSAGES/messages.po")),
             line: 1,
         }
@@ -189,15 +195,24 @@ mod tests {
 
     fn make_call(msgid: &str, line: u32) -> TranslationCall {
         let pos = Position { line, character: 4 };
-        let end_pos = Position { line, character: 4 + msgid.len() as u32 };
+        let end_pos = Position {
+            line,
+            character: 4 + msgid.len() as u32,
+        };
         TranslationCall {
             func: TranslationFunc::Gettext,
             msgid: Some(msgid.to_owned()),
             msgid_plural: None,
             msgctxt: None,
             domain: None,
-            range: Range { start: pos, end: end_pos },
-            msgid_range: Some(Range { start: pos, end: end_pos }),
+            range: Range {
+                start: pos,
+                end: end_pos,
+            },
+            msgid_range: Some(Range {
+                start: pos,
+                end: end_pos,
+            }),
             unresolved_reason: None,
             unresolved_arg_range: None,
             is_implicit_concat: false,
@@ -212,8 +227,14 @@ mod tests {
         };
         CodeLens {
             range: Range {
-                start: Position { line: 0, character: 0 },
-                end: Position { line: 0, character: 0 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
             },
             command: None,
             data: serde_json::to_value(&data).ok(),
@@ -221,11 +242,21 @@ mod tests {
     }
 
     fn make_source_lens(key: CatalogKey) -> CodeLens {
-        let data = LensData { key, kind: LensKind::Source, locale: None };
+        let data = LensData {
+            key,
+            kind: LensKind::Source,
+            locale: None,
+        };
         CodeLens {
             range: Range {
-                start: Position { line: 0, character: 0 },
-                end: Position { line: 0, character: 0 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
             },
             command: None,
             data: serde_json::to_value(&data).ok(),
@@ -317,7 +348,10 @@ mod tests {
 
     #[test]
     fn resolve_catalog_shows_full_coverage() {
-        let entries = vec![make_entry("Hello", "es", false), make_entry("Hello", "fr", false)];
+        let entries = vec![
+            make_entry("Hello", "es", false),
+            make_entry("Hello", "fr", false),
+        ];
         let index = CatalogIndex::build(entries);
         let lens = make_catalog_lens(CatalogKey::new("Hello"), Some("es"));
         let cmd = resolve_lens(lens, &index, &[]).command.unwrap();
@@ -327,7 +361,10 @@ mod tests {
     #[test]
     fn resolve_catalog_counts_missing() {
         // fr has empty msgstr → treated as missing by missing_locales
-        let entries = vec![make_entry("Hello", "es", false), make_entry("Hello", "fr", true)];
+        let entries = vec![
+            make_entry("Hello", "es", false),
+            make_entry("Hello", "fr", true),
+        ];
         let index = CatalogIndex::build(entries);
         let lens = make_catalog_lens(CatalogKey::new("Hello"), Some("es"));
         let cmd = resolve_lens(lens, &index, &[]).command.unwrap();
@@ -345,7 +382,10 @@ mod tests {
 
     #[test]
     fn resolve_catalog_fuzzy_only_for_stored_locale() {
-        let entries = vec![make_entry("Hello", "es", true), make_entry("Hello", "fr", false)];
+        let entries = vec![
+            make_entry("Hello", "es", true),
+            make_entry("Hello", "fr", false),
+        ];
         let index = CatalogIndex::build(entries);
         // Viewing "fr" — should NOT show fuzzy even though "es" is fuzzy
         let lens = make_catalog_lens(CatalogKey::new("Hello"), Some("fr"));
@@ -403,8 +443,14 @@ mod tests {
         let index = CatalogIndex::build(vec![]);
         let lens = CodeLens {
             range: Range {
-                start: Position { line: 0, character: 0 },
-                end: Position { line: 0, character: 0 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
             },
             command: None,
             data: None,
