@@ -243,12 +243,16 @@ fn action_add_plural_forms(
 }
 
 fn compute_add_plural_forms_edit(span: &PoEntrySpan, existing: u32, nplurals: u32) -> TextEdit {
-    let insert_line = span.msgstr_end_line + 1;
+    // Insert new msgstr lines immediately after the end of the last existing
+    // msgstr line rather than at the start of the following line.  This keeps
+    // the insertion within the current entry's block even when there is no
+    // blank-line separator before the next entry.
+    let anchor_line = span.msgstr_end_line;
     let range = Range {
-        start: Position { line: insert_line, character: 0 },
-        end: Position { line: insert_line, character: 0 },
+        start: Position { line: anchor_line, character: u32::MAX },
+        end: Position { line: anchor_line, character: u32::MAX },
     };
-    let new_text = (existing..nplurals).map(|i| format!("msgstr[{i}] \"\"\n")).collect();
+    let new_text: String = (existing..nplurals).map(|i| format!("\nmsgstr[{i}] \"\"")).collect();
     TextEdit { range, new_text }
 }
 

@@ -148,11 +148,14 @@ fn render_full(findings: &[Finding], color: &ColorConfig, root: &Path) -> String
         }
         if let Some(src_line) = lines.get((f.line - 1) as usize) {
             out.push_str(&format!("{:>4} {} {}\n", f.line, color.dim("|"), src_line));
-            let indent = " ".repeat(5 + (f.col as usize).saturating_sub(1));
+            // Use char count (not byte length) for correct caret alignment on
+            // lines that contain multibyte UTF-8 characters.
+            let col_chars = (f.col as usize).saturating_sub(1);
+            let indent = " ".repeat(5 + col_chars);
             let width = if f.end_line == f.line {
                 (f.end_col.saturating_sub(f.col) as usize).max(1)
             } else {
-                src_line.len().saturating_sub((f.col as usize).saturating_sub(1)).max(1)
+                src_line.chars().count().saturating_sub(col_chars).max(1)
             };
             let carets = "^".repeat(width);
             out.push_str(&format!("   {} {}{}\n", color.dim("|"), indent, color.severity(f.severity, &carets)));

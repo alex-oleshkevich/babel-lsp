@@ -71,13 +71,29 @@ pub fn build_rename_edit(
     catalog_bufs: &HashMap<std::path::PathBuf, String>,
     call_sites: &[(Uri, Vec<TranslationCall>)],
 ) -> Result<WorkspaceEdit, String> {
-    // REQ-RNM-07: collision guard — refuse if the target key already exists.
+    // REQ-RNM-07: collision guard — refuse if the target key already exists in catalog.
     let new_key = CatalogKey { msgid: new_name.into(), msgctxt: key.msgctxt.clone() };
     if !index.lookup(&new_key).is_empty() || index.lookup_pot(&new_key).is_some() {
         return Err(format!(
             "Cannot rename: a message '{}' already exists — renaming would merge two messages",
             new_name
         ));
+    }
+
+    // Also check source call sites — if any call site already uses new_name as its
+    // msgid, renaming would create a collision in the source (REQ-RNM-07).
+    for (_uri, calls) in call_sites {
+        for call in calls {
+            if call.msgid.as_deref() == Some(new_name)
+                && call.msgctxt.as_deref() == key.msgctxt.as_deref()
+                && call.msgid.as_deref() != Some(key.msgid.as_str())
+            {
+                return Err(format!(
+                    "Cannot rename: a call site already uses '{}' as a msgid — renaming would create a collision",
+                    new_name
+                ));
+            }
+        }
     }
 
     let escaped = escape_po(new_name);
@@ -113,7 +129,7 @@ pub fn build_rename_edit(
             let Some(line_content) = lines.get(msgid_line as usize) else { continue };
             let Some(kw_pos) = line_content.find("msgid \"") else { continue };
             let start_char = (kw_pos + 7) as u32;
-            let end_char = line_content.len() as u32 - 1;
+            let end_char = line_content.chars().count() as u32 - 1;
             let range = Range {
                 start: Position { line: msgid_line, character: start_char },
                 end: Position { line: msgid_line, character: end_char },
@@ -297,6 +313,21 @@ mod tests {
         let key = CatalogKey::new("Checkout");
         let bufs = HashMap::new();
         let result = build_rename_edit(&key, "Cart", &index, &bufs, &[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Cart"));
+    }
+
+    #[test]
+    fn req_rnm_07_source_side_collision_returns_error() {
+        // Renaming "Checkout" to "Cart" where "Cart" already exists as a call site msgid.
+        let e = entry("Checkout", "/locale/de/messages.po", 1);
+        let index = CatalogIndex::build(vec![e]);
+        let key = CatalogKey::new("Checkout");
+        let bufs = HashMap::new();
+        // A source file that has both _("Checkout") and _("Cart").
+        let source_calls = calls(r#"_("Checkout"); _("Cart")"#);
+        let call_sites = vec![(uri("/app/views.py"), source_calls)];
+        let result = build_rename_edit(&key, "Cart", &index, &bufs, &call_sites);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Cart"));
     }
