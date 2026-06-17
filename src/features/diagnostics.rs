@@ -562,7 +562,7 @@ pub fn check_catalog(
         // po/number-mismatch
         let id_nums = extract_numbers(msgid);
         let str_nums = extract_numbers(msgstr);
-        if id_nums != str_nums {
+        if id_nums != str_nums && !numbers_equivalent(&id_nums, &str_nums) {
             diags.push(make_diag(
                 entry_range(entry),
                 "po/number-mismatch",
@@ -875,7 +875,10 @@ fn extract_urls(s: &str) -> Vec<String> {
                     c.is_ascii_whitespace() || matches!(c, ')' | ',' | '"' | '\'' | '<' | '>')
                 })
                 .unwrap_or(rest.len());
-            urls.push(rest[..end].to_string());
+            let raw = &rest[..end];
+            // Strip trailing ASCII punctuation that commonly appears in prose
+            let trimmed = raw.trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | '!' | '?'));
+            urls.push(trimmed.to_string());
             idx += end;
         } else {
             idx += rest.chars().next().map_or(1, |c| c.len_utf8());
@@ -916,12 +919,26 @@ fn extract_numbers(s: &str) -> Vec<String> {
             let prev_alpha = i > 0 && chars[i - 1].is_alphabetic();
             if !prev_alpha {
                 let start = i;
-                while i < chars.len() && chars[i].is_ascii_digit() {
-                    i += 1;
+                // Consume digits, allowing commas as thousand separators
+                // (e.g. "1,000" or "1,000,000")
+                while i < chars.len() {
+                    if chars[i].is_ascii_digit() {
+                        i += 1;
+                    } else if chars[i] == ','
+                        && i + 1 < chars.len()
+                        && chars[i + 1].is_ascii_digit()
+                    {
+                        // Comma followed by digit — treat as thousand separator
+                        i += 1;
+                    } else {
+                        break;
+                    }
                 }
                 let next_alpha = i < chars.len() && chars[i].is_alphabetic();
                 if !next_alpha {
-                    nums.push(chars[start..i].iter().collect());
+                    // Normalize: remove commas so "1,000" becomes "1000"
+                    let raw: String = chars[start..i].iter().collect();
+                    nums.push(raw.replace(',', ""));
                 }
                 continue;
             }
@@ -930,6 +947,31 @@ fn extract_numbers(s: &str) -> Vec<String> {
     }
     nums.sort();
     nums
+}
+
+/// Check if two number lists represent the same numeric values, tolerating locale
+/// formatting differences (thousand separators, decimal comma vs period).
+/// Strips commas and periods used as thousand separators before parsing as f64.
+fn numbers_equivalent(a: &[String], b: &[String]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let parse = |s: &str| -> Option<f64> {
+        // Remove thousand separators (commas) and try direct parse
+        let cleaned = s.replace(',', "");
+        cleaned.parse::<f64>().ok()
+    };
+    let mut a_vals: Vec<Option<f64>> = a.iter().map(|s| parse(s)).collect();
+    let mut b_vals: Vec<Option<f64>> = b.iter().map(|s| parse(s)).collect();
+    // If any fail to parse, fall back to string comparison (not equivalent)
+    if a_vals.iter().any(|v| v.is_none()) || b_vals.iter().any(|v| v.is_none()) {
+        return false;
+    }
+    a_vals.sort_by(|x, y| x.unwrap().partial_cmp(&y.unwrap()).unwrap_or(std::cmp::Ordering::Equal));
+    b_vals.sort_by(|x, y| x.unwrap().partial_cmp(&y.unwrap()).unwrap_or(std::cmp::Ordering::Equal));
+    a_vals.iter().zip(b_vals.iter()).all(|(x, y)| {
+        (x.unwrap() - y.unwrap()).abs() < f64::EPSILON
+    })
 }
 
 fn has_repeated_word(s: &str) -> bool {
@@ -1115,6 +1157,24 @@ mod tests {
         let c = calls(r#"_("Hello")"#);
         let diags = check_source(&c, &index);
         assert!(!has_code(&diags, "msg/implicit-concat"));
+    }
+
+    // ── is_in_pot includes msgctxt (babel-lsp-iyz) ───────────────────────────
+
+    #[test]
+    fn is_in_pot_includes_msgctxt_in_key() {
+        // pgettext("menu", "File") must NOT suppress unknown-id for _("File")
+        // and vice-versa — the msgctxt is part of the key.
+        let mut pot = make_entry("", "File", "");
+        pot.msgctxt = Some("menu".into());
+        pot.file_path = "/locale/messages.pot".into();
+        let index = CatalogIndex::build(vec![pot]);
+
+        // _("File") has no context → key {msgid:"File", msgctxt:None} → not in pot
+        let c = calls(r#"_("File")"#);
+        let diags = check_source(&c, &index);
+        assert!(has_code(&diags, "msg/unknown-id"),
+            "plain _(\"File\") should fire unknown-id when only pgettext(\"menu\",\"File\") is in pot");
     }
 
     // ── REQ-DIAG-05: msg/unknown-id ──────────────────────────────────────────
@@ -1705,6 +1765,20 @@ mod tests {
         assert!(!has_code(&diags, "po/url-changed"));
     }
 
+    // ── po/url-changed ───────────────────────────────────────────────────────
+
+    #[test]
+    fn url_changed_silent_when_trailing_period_differs_only() {
+        // URL in prose ending with "." — the period is punctuation, not part of the URL
+        let e = po_entry(
+            "See https://example.com/path. For details.",
+            "Siehe https://example.com/path. Für Details.",
+        );
+        let diags = cat_check(vec![header_entry(), e]);
+        assert!(!has_code(&diags, "po/url-changed"),
+            "trailing period on URL must not cause false positive, got: {:?}", codes(&diags));
+    }
+
     // ── po/number-mismatch ───────────────────────────────────────────────────
 
     #[test]
@@ -1720,6 +1794,15 @@ mod tests {
         let e = po_entry("Use UTF-8 encoding", "Verwende UTF-8 Kodierung");
         let diags = cat_check(vec![header_entry(), e]);
         assert!(!has_code(&diags, "po/number-mismatch"));
+    }
+
+    #[test]
+    fn number_mismatch_silent_for_thousand_separator_formatting() {
+        // "1,000" (English) vs "1000" (no separator) represent the same value
+        let e = po_entry("You have 1,000 items", "Sie haben 1000 Artikel");
+        let diags = cat_check(vec![header_entry(), e]);
+        assert!(!has_code(&diags, "po/number-mismatch"),
+            "thousand-separated 1,000 vs 1000 must not fire, got: {:?}", codes(&diags));
     }
 
     // ── po/same-plurals ───────────────────────────────────────────────────────
