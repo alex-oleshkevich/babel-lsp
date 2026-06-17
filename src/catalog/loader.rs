@@ -440,6 +440,57 @@ mod tests {
         assert_eq!(map.get_line(&CatalogKey::new("Hello World")), Some(4));
     }
 
+    #[test]
+    fn line_map_pot_entry_with_msgctxt() {
+        // A .pot file may contain entries with msgctxt; the line map must
+        // record them under the combined key so load_po_from_str can look them up.
+        let content = concat!(
+            "msgid \"\"\nmsgstr \"\"\n\n",
+            "msgctxt \"button\"\n",
+            "msgid \"Submit\"\n",
+            "msgstr \"\"\n",
+        );
+        let map = PoLineMap::build(content);
+        assert_eq!(
+            map.get_line(&CatalogKey::with_ctx("Submit", "button")),
+            Some(5)
+        );
+        // The same msgid without context must NOT match.
+        assert_eq!(map.get_line(&CatalogKey::new("Submit")), None);
+    }
+
+    #[test]
+    fn line_map_skips_obsolete_entries() {
+        // Obsolete entries start with "#~"; the scanner must ignore them entirely.
+        let content = concat!(
+            "msgid \"\"\nmsgstr \"\"\n\n",
+            "#~ msgid \"OldMsg\"\n",
+            "#~ msgstr \"AltesMsg\"\n",
+            "\n",
+            "msgid \"NewMsg\"\n",
+            "msgstr \"NeueMsg\"\n",
+        );
+        let map = PoLineMap::build(content);
+        assert_eq!(map.get_line(&CatalogKey::new("OldMsg")), None);
+        assert_eq!(map.get_line(&CatalogKey::new("NewMsg")), Some(7));
+    }
+
+    #[test]
+    fn line_map_plural_entry_maps_msgid_line_not_plural_line() {
+        // PoLineMap must record the line of the `msgid` keyword, not `msgid_plural`.
+        let content = concat!(
+            "msgid \"\"\nmsgstr \"\"\n\n",
+            "msgid \"%(n)d item\"\n",   // line 4
+            "msgid_plural \"%(n)d items\"\n",
+            "msgstr[0] \"\"\n",
+            "msgstr[1] \"\"\n",
+        );
+        let map = PoLineMap::build(content);
+        assert_eq!(map.get_line(&CatalogKey::new("%(n)d item")), Some(4));
+        // msgid_plural value must not be registered as a separate key.
+        assert_eq!(map.get_line(&CatalogKey::new("%(n)d items")), None);
+    }
+
     // --- load_po_file ---
 
     const MINIMAL_PO: &str = concat!(
