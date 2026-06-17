@@ -52,7 +52,7 @@ jobs:
         if: matrix.cross != true
         run: cargo build --release --target ${{ matrix.target }}
       - name: Strip binary
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.cross != true
         run: strip target/${{ matrix.target }}/release/babel-lsp
       - name: Rename artifact
         shell: bash
