@@ -126,12 +126,12 @@ fn render_full(findings: &[Finding], color: &ColorConfig, root: &Path) -> String
         out.push('\n');
         out.push_str(&format!(
             "  {} {}:{}:{}\n",
-            color.dim("-->"),
+            color.blue("-->"),
             path_str,
             f.line,
             f.col
         ));
-        out.push_str(&format!("   {}\n", color.dim("|")));
+        out.push_str(&format!("   {}\n", color.blue("|")));
 
         let lines = file_cache
             .entry(f.path.clone())
@@ -140,11 +140,11 @@ fn render_full(findings: &[Finding], color: &ColorConfig, root: &Path) -> String
         // Show context: one line before (if available) + the finding line.
         if f.line >= 2 {
             if let Some(ctx) = lines.get((f.line - 2) as usize) {
-                out.push_str(&format!("{:>4} {} {}\n", f.line - 1, color.dim("|"), ctx));
+                out.push_str(&format!("{:>4} {} {}\n", f.line - 1, color.blue("|"), ctx));
             }
         }
         if let Some(src_line) = lines.get((f.line - 1) as usize) {
-            out.push_str(&format!("{:>4} {} {}\n", f.line, color.dim("|"), src_line));
+            out.push_str(&format!("{:>4} {} {}\n", f.line, color.blue("|"), src_line));
             // Use char count (not byte length) for correct caret alignment on
             // lines that contain multibyte UTF-8 characters.
             let col_chars = (f.col as usize).saturating_sub(1);
@@ -157,13 +157,13 @@ fn render_full(findings: &[Finding], color: &ColorConfig, root: &Path) -> String
             let carets = "^".repeat(width);
             out.push_str(&format!(
                 "   {} {}{}\n",
-                color.dim("|"),
+                color.blue("|"),
                 indent,
                 color.severity(f.severity, &carets)
             ));
         }
-        out.push_str(&format!("   {}\n", color.dim("|")));
-        out.push_str(&format!("{} {}\n", color.cyan("help:"), f.message));
+        out.push_str(&format!("   {}\n", color.blue("|")));
+        out.push_str(&format!("{} {}\n", color.help_label("help:"), f.message));
         out.push('\n');
     }
     out

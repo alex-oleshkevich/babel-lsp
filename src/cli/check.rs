@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
+use owo_colors::OwoColorize;
 use tower_lsp_server::ls_types::{DiagnosticSeverity, NumberOrString, Uri};
 use walkdir::WalkDir;
 
@@ -93,26 +94,17 @@ impl ColorConfig {
         if !self.enabled {
             return s.to_string();
         }
-        let code = match sev {
-            DiagnosticSeverity::ERROR => "\x1b[31m",
-            DiagnosticSeverity::WARNING => "\x1b[33m",
-            DiagnosticSeverity::INFORMATION => "\x1b[34m",
-            _ => "\x1b[2m",
-        };
-        format!("{code}{s}\x1b[0m")
+        match sev {
+            DiagnosticSeverity::ERROR => s.red().bold().to_string(),
+            DiagnosticSeverity::WARNING => s.yellow().bold().to_string(),
+            DiagnosticSeverity::INFORMATION => s.blue().to_string(),
+            _ => s.dimmed().to_string(),
+        }
     }
 
     pub fn dim(&self, s: &str) -> String {
         if self.enabled {
-            format!("\x1b[2m{s}\x1b[0m")
-        } else {
-            s.to_string()
-        }
-    }
-
-    pub fn cyan(&self, s: &str) -> String {
-        if self.enabled {
-            format!("\x1b[36m{s}\x1b[0m")
+            s.dimmed().to_string()
         } else {
             s.to_string()
         }
@@ -120,7 +112,23 @@ impl ColorConfig {
 
     pub fn bold(&self, s: &str) -> String {
         if self.enabled {
-            format!("\x1b[1m{s}\x1b[0m")
+            s.bold().to_string()
+        } else {
+            s.to_string()
+        }
+    }
+
+    pub fn help_label(&self, s: &str) -> String {
+        if self.enabled {
+            s.yellow().bold().to_string()
+        } else {
+            s.to_string()
+        }
+    }
+
+    pub fn blue(&self, s: &str) -> String {
+        if self.enabled {
+            s.blue().to_string()
         } else {
             s.to_string()
         }
