@@ -31,7 +31,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Serve the language server over stdio
-    Lsp,
+    Lsp {
+        /// Communicate over stdio (the only supported transport; accepted for editor compatibility)
+        #[arg(long)]
+        stdio: bool,
+    },
     /// Run headless diagnostics (CI linter)
     Check(CheckArgs),
     /// Print per-locale translation coverage
@@ -47,8 +51,8 @@ enum Command {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Lsp) {
-        Command::Lsp => run_lsp().await,
+    match cli.command.unwrap_or(Command::Lsp { stdio: true }) {
+        Command::Lsp { .. } => run_lsp().await,
         Command::Check(args) => std::process::exit(run_check(args)),
         Command::Stats(args) => std::process::exit(run_stats(args)),
         Command::Extract(args) => std::process::exit(run_extract(args)),
@@ -62,6 +66,12 @@ async fn run_lsp() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
         .init();
+
+    tracing::info!(
+        "{} v{} starting",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
