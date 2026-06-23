@@ -1,3 +1,0 @@
-name = "PO"
-path_suffixes = ["po", "pot"]
-line_comments = ["# "]
