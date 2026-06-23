@@ -1,4 +1,4 @@
-use zed_extension_api::{self as zed, settings::LspSettings, LanguageServerId, Result};
+use zed_extension_api::{self as zed, serde_json, settings::LspSettings, LanguageServerId, Result};
 
 const SERVER_NAME: &str = "babel-lsp";
 
@@ -33,6 +33,30 @@ impl zed::Extension for BabelExtension {
             args: vec!["lsp".into()],
             env,
         })
+    }
+
+    fn language_server_initialization_options(
+        &mut self,
+        language_server_id: &LanguageServerId,
+        worktree: &zed::Worktree,
+    ) -> Result<Option<serde_json::Value>> {
+        let settings = LspSettings::for_worktree(language_server_id.as_ref(), worktree)
+            .ok()
+            .and_then(|s| s.initialization_options.clone())
+            .unwrap_or_default();
+        Ok(Some(settings))
+    }
+
+    fn language_server_workspace_configuration(
+        &mut self,
+        language_server_id: &LanguageServerId,
+        worktree: &zed::Worktree,
+    ) -> Result<Option<serde_json::Value>> {
+        let settings = LspSettings::for_worktree(language_server_id.as_ref(), worktree)
+            .ok()
+            .and_then(|s| s.settings.clone())
+            .unwrap_or_default();
+        Ok(Some(settings))
     }
 }
 

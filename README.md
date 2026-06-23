@@ -51,9 +51,7 @@ Language server for Python [Babel](https://babel.pocoo.org/) i18n. Works with `.
 
 ## Installation
 
-```bash
-cargo install babel-lsp
-```
+Download a binary from the [releases page](https://github.com/alex-oleshkevich/babel-lsp/releases).
 
 ## Configuration
 
