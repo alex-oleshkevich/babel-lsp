@@ -22,7 +22,7 @@ STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 
 cp "$ZED_SRC/extension.toml" "$STAGE/"
-cp -r "$ZED_SRC/languages" "$STAGE/"
+[ -d "$ZED_SRC/languages" ] && cp -r "$ZED_SRC/languages" "$STAGE/"
 cp "$ZED_SRC/target/$WASM_TARGET/release/babel_lsp_zed.wasm" "$STAGE/extension.wasm"
 
 (cd "$STAGE" && zip -r "$OLDPWD/$OUTPUT" .)
