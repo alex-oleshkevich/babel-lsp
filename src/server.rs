@@ -811,10 +811,9 @@ impl LanguageServer for Backend {
                 .unwrap_or(false);
             if is_config_file {
                 if let Some(root) = self.state.workspace_root.get().cloned() {
-                    let new_config =
-                        tokio::task::spawn_blocking(move || resolve_config(&root))
-                            .await
-                            .unwrap_or_default();
+                    let new_config = tokio::task::spawn_blocking(move || resolve_config(&root))
+                        .await
+                        .unwrap_or_default();
                     *self.state.config.write().await = new_config;
                     self.state.trigger_rebuild();
                 }

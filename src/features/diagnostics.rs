@@ -2320,7 +2320,10 @@ mod tests {
         Diagnostic {
             range: Range {
                 start: Position { line, character: 2 },
-                end: Position { line, character: 10 },
+                end: Position {
+                    line,
+                    character: 10,
+                },
             },
             severity: Some(DiagnosticSeverity::WARNING),
             code: Some(NumberOrString::String(code.into())),
@@ -2354,7 +2357,10 @@ mod tests {
         let src = r#"_("Checkout")  # noqa: msg/unknown-id"#;
         let d = diag_on_line(0, "msg/unknown-id");
         let out = apply_noqa(vec![d], src);
-        assert!(out.is_empty(), "# noqa: msg/unknown-id must suppress that code");
+        assert!(
+            out.is_empty(),
+            "# noqa: msg/unknown-id must suppress that code"
+        );
     }
 
     #[test]
