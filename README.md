@@ -137,11 +137,7 @@ babel-lsp check --exit-zero
 
 ### Zed
 
-Install the bundled extension:
-
-```bash
-just install-zed
-```
+Install from the Zed extensions panel (`Cmd+Shift+X`) — search for **babel-lsp** and click Install.
 
 Then add to `~/.config/zed/settings.json`:
 
