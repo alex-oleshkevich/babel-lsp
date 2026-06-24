@@ -165,6 +165,43 @@ fn make_diag(
     }
 }
 
+/// Remove diagnostics suppressed by `# noqa` comments in `source`.
+///
+/// Bare `# noqa` suppresses every finding on that line.
+/// `# noqa: msg/unknown-id` suppresses only that code on that line.
+/// Multiple codes can be comma-separated: `# noqa: msg/unknown-id, msg/fstring-in-call`.
+pub fn apply_noqa(diags: Vec<Diagnostic>, source: &str) -> Vec<Diagnostic> {
+    if !source.contains("# noqa") {
+        return diags;
+    }
+    let lines: Vec<&str> = source.lines().collect();
+    diags
+        .into_iter()
+        .filter(|d| {
+            let line_idx = d.range.start.line as usize;
+            let Some(line) = lines.get(line_idx) else {
+                return true;
+            };
+            let Some(pos) = line.find("# noqa") else {
+                return true;
+            };
+            let after = line[pos + 6..].trim_start();
+            if after.is_empty() || after.starts_with('\n') || after.starts_with('#') {
+                return false;
+            }
+            if let Some(rest) = after.strip_prefix(':') {
+                let code_str = match d.code.as_ref() {
+                    Some(NumberOrString::String(s)) => s.as_str(),
+                    _ => return true,
+                };
+                let codes: Vec<&str> = rest.split(',').map(str::trim).collect();
+                return !codes.contains(&code_str);
+            }
+            true
+        })
+        .collect()
+}
+
 /// Apply per-rule select/ignore/severity config to a diagnostic list.
 ///
 /// Rules (from E15 REQ-CFG-05):
@@ -2275,6 +2312,84 @@ mod tests {
     fn filter_empty_input_returns_empty() {
         let out = apply_diag_filter(vec![], &DiagnosticsConfig::default());
         assert!(out.is_empty());
+    }
+
+    // ── apply_noqa ────────────────────────────────────────────────────────────
+
+    fn diag_on_line(line: u32, code: &str) -> Diagnostic {
+        Diagnostic {
+            range: Range {
+                start: Position { line, character: 2 },
+                end: Position { line, character: 10 },
+            },
+            severity: Some(DiagnosticSeverity::WARNING),
+            code: Some(NumberOrString::String(code.into())),
+            code_description: None,
+            source: Some("babel-lsp".into()),
+            message: "test".into(),
+            related_information: None,
+            tags: None,
+            data: None,
+        }
+    }
+
+    #[test]
+    fn noqa_no_comment_passes_through() {
+        let src = r#"_("Checkout")"#;
+        let d = diag_on_line(0, "msg/unknown-id");
+        let out = apply_noqa(vec![d], src);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn noqa_bare_suppresses_all_on_line() {
+        let src = r#"_("Checkout")  # noqa"#;
+        let d = diag_on_line(0, "msg/unknown-id");
+        let out = apply_noqa(vec![d], src);
+        assert!(out.is_empty(), "bare # noqa must suppress everything");
+    }
+
+    #[test]
+    fn noqa_specific_code_suppresses_matching() {
+        let src = r#"_("Checkout")  # noqa: msg/unknown-id"#;
+        let d = diag_on_line(0, "msg/unknown-id");
+        let out = apply_noqa(vec![d], src);
+        assert!(out.is_empty(), "# noqa: msg/unknown-id must suppress that code");
+    }
+
+    #[test]
+    fn noqa_specific_code_does_not_suppress_other_codes() {
+        let src = r#"_("Checkout")  # noqa: msg/fstring-in-call"#;
+        let d = diag_on_line(0, "msg/unknown-id");
+        let out = apply_noqa(vec![d], src);
+        assert_eq!(out.len(), 1, "wrong code must not be suppressed");
+    }
+
+    #[test]
+    fn noqa_comma_separated_codes() {
+        let src = r#"_("Checkout")  # noqa: msg/fstring-in-call, msg/unknown-id"#;
+        let d1 = diag_on_line(0, "msg/unknown-id");
+        let d2 = diag_on_line(0, "msg/fstring-in-call");
+        let out = apply_noqa(vec![d1, d2], src);
+        assert!(out.is_empty(), "both codes should be suppressed");
+    }
+
+    #[test]
+    fn noqa_only_suppresses_matching_line() {
+        let src = "_('Checkout')  # noqa\n_(\"Other\")";
+        let d0 = diag_on_line(0, "msg/unknown-id");
+        let d1 = diag_on_line(1, "msg/unknown-id");
+        let out = apply_noqa(vec![d0, d1], src);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].range.start.line, 1, "only line 1 should survive");
+    }
+
+    #[test]
+    fn noqa_fast_path_when_no_noqa_in_source() {
+        let src = "_('Checkout')";
+        let d = diag_on_line(0, "msg/unknown-id");
+        let out = apply_noqa(vec![d], src);
+        assert_eq!(out.len(), 1);
     }
 
     // ── check_project helpers ─────────────────────────────────────────────────

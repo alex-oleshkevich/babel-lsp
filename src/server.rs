@@ -800,6 +800,26 @@ impl LanguageServer for Backend {
         // REQ-CAT-09: client-side watcher events for .po/.pot files.
         let mut needs_rebuild = false;
         for event in &params.changes {
+            let is_config_file = event
+                .uri
+                .to_file_path()
+                .and_then(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| matches!(n, "pyproject.toml" | "babel-lsp.toml" | "babel.cfg"))
+                })
+                .unwrap_or(false);
+            if is_config_file {
+                if let Some(root) = self.state.workspace_root.get().cloned() {
+                    let new_config =
+                        tokio::task::spawn_blocking(move || resolve_config(&root))
+                            .await
+                            .unwrap_or_default();
+                    *self.state.config.write().await = new_config;
+                    self.state.trigger_rebuild();
+                }
+                continue;
+            }
             if !is_catalog_uri(&event.uri) {
                 continue;
             }
@@ -844,6 +864,11 @@ impl LanguageServer for Backend {
             diagnostics::check_source(&calls, &index)
         };
         let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
+        let filtered = if !is_catalog_uri(&uri) {
+            diagnostics::apply_noqa(filtered, &params.text_document.text)
+        } else {
+            filtered
+        };
         drop(index);
         drop(config);
         self.client.publish_diagnostics(uri, filtered, None).await;
@@ -877,6 +902,7 @@ impl LanguageServer for Backend {
             let calls = extract_calls(&text, &uri, &config);
             let diags = diagnostics::check_source(&calls, &index);
             let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
+            let filtered = diagnostics::apply_noqa(filtered, &text);
             drop(index);
             drop(config);
             self.client.publish_diagnostics(uri, filtered, None).await;
@@ -911,6 +937,7 @@ impl LanguageServer for Backend {
             let calls = extract_calls(&text, &uri, &config);
             let diags = diagnostics::check_source(&calls, &index);
             let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
+            let filtered = diagnostics::apply_noqa(filtered, &text);
             drop(index);
             drop(config);
             self.client.publish_diagnostics(uri, filtered, None).await;
@@ -1069,6 +1096,7 @@ async fn publish_diagnostics_after_rebuild(state: &Arc<WorkspaceState>, client: 
         let calls = extract_calls(text, uri, &config);
         let diags = diagnostics::check_source(&calls, &index);
         let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
+        let filtered = diagnostics::apply_noqa(filtered, text);
         client
             .publish_diagnostics(uri.clone(), filtered, None)
             .await;
@@ -1204,6 +1232,18 @@ async fn register_lsp_watcher(client: &Client) {
             },
             FileSystemWatcher {
                 glob_pattern: GlobPattern::String("**/*.pot".to_string()),
+                kind: None,
+            },
+            FileSystemWatcher {
+                glob_pattern: GlobPattern::String("**/pyproject.toml".to_string()),
+                kind: None,
+            },
+            FileSystemWatcher {
+                glob_pattern: GlobPattern::String("**/babel-lsp.toml".to_string()),
+                kind: None,
+            },
+            FileSystemWatcher {
+                glob_pattern: GlobPattern::String("**/babel.cfg".to_string()),
                 kind: None,
             },
         ],
