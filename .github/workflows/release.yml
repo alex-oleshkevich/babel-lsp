@@ -99,7 +99,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Publish to AUR
-        if: env.AUR_SSH_KEY != ''
         env:
           AUR_SSH_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           GH_REPO: ${{ github.repository }}
@@ -152,7 +151,6 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Bump Homebrew formula
-        if: env.HOMEBREW_GITHUB_TOKEN != ''
         env:
           HOMEBREW_GITHUB_TOKEN: ${{ secrets.HOMEBREW_GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
