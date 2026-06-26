@@ -137,7 +137,7 @@ jobs:
             pkg/aur/PKGBUILD > /tmp/aur/PKGBUILD
 
           docker run --rm -v /tmp/aur:/pkg archlinux:base-devel \
-            bash -c "cd /pkg && makepkg --printsrcinfo > .SRCINFO" 2>/dev/null || true
+            bash -c "cd /pkg && makepkg --printsrcinfo > .SRCINFO"
 
           cd /tmp/aur
           git config user.email "ci@babel-lsp.dev"
