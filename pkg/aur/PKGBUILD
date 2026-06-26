@@ -11,8 +11,8 @@ depends=()
 provides=('babel-lsp')
 conflicts=('babel-lsp')
 
-source_x86_64=("${pkgname}-linux-x86_64::https://github.com/alex-oleshkevich/babel-lsp/releases/download/v${pkgver}/babel-lsp-linux-x86_64")
-source_aarch64=("${pkgname}-linux-aarch64::https://github.com/alex-oleshkevich/babel-lsp/releases/download/v${pkgver}/babel-lsp-linux-aarch64")
+source_x86_64=("${pkgname}-linux-x86_64::${url}/releases/download/v${pkgver}/babel-lsp-linux-x86_64")
+source_aarch64=("${pkgname}-linux-aarch64::${url}/releases/download/v${pkgver}/babel-lsp-linux-aarch64")
 sha256sums_x86_64=('SKIP')
 sha256sums_aarch64=('SKIP')
 
