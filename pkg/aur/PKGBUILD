@@ -1,6 +1,7 @@
 # Maintainer: Alex Oleshkevich <techsupport@investerra.ch>
+pkgbase=babel-lsp
 pkgname=babel-lsp
-pkgver=0.1.0
+pkgver=0.2.1
 pkgrel=1
 pkgdesc="Language server for Python Babel i18n (.po/.pot catalog diagnostics, completion, hover)"
 arch=('x86_64' 'aarch64')
