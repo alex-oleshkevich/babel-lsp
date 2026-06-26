@@ -185,19 +185,21 @@ pub fn apply_noqa(diags: Vec<Diagnostic>, source: &str) -> Vec<Diagnostic> {
             let Some(pos) = line.find("# noqa") else {
                 return true;
             };
-            let after = line[pos + 6..].trim_start();
-            if after.is_empty() || after.starts_with('\n') || after.starts_with('#') {
+            // Ignore a trailing `#` comment after the directive, e.g.
+            // `# noqa  # why` or `# noqa: msg/unknown-id  # legacy key`.
+            let after = line[pos + 6..].split('#').next().unwrap_or("").trim();
+            if after.is_empty() {
                 return false;
             }
-            if let Some(rest) = after.strip_prefix(':') {
-                let code_str = match d.code.as_ref() {
-                    Some(NumberOrString::String(s)) => s.as_str(),
-                    _ => return true,
-                };
-                let codes: Vec<&str> = rest.split(',').map(str::trim).collect();
-                return !codes.contains(&code_str);
-            }
-            true
+            let Some(rest) = after.strip_prefix(':') else {
+                return true;
+            };
+            let code_str = match d.code.as_ref() {
+                Some(NumberOrString::String(s)) => s.as_str(),
+                _ => return true,
+            };
+            let codes: Vec<&str> = rest.split(',').map(str::trim).collect();
+            !codes.contains(&code_str)
         })
         .collect()
 }
@@ -2378,6 +2380,28 @@ mod tests {
         let d2 = diag_on_line(0, "msg/fstring-in-call");
         let out = apply_noqa(vec![d1, d2], src);
         assert!(out.is_empty(), "both codes should be suppressed");
+    }
+
+    #[test]
+    fn noqa_specific_code_with_trailing_comment() {
+        let src = r#"_("Checkout")  # noqa: msg/unknown-id  # legacy key"#;
+        let d = diag_on_line(0, "msg/unknown-id");
+        let out = apply_noqa(vec![d], src);
+        assert!(
+            out.is_empty(),
+            "a trailing comment must not break code matching"
+        );
+    }
+
+    #[test]
+    fn noqa_bare_with_trailing_comment() {
+        let src = r#"_("Checkout")  # noqa  # explain why"#;
+        let d = diag_on_line(0, "msg/unknown-id");
+        let out = apply_noqa(vec![d], src);
+        assert!(
+            out.is_empty(),
+            "bare # noqa with trailing comment suppresses"
+        );
     }
 
     #[test]
