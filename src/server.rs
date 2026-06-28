@@ -142,9 +142,7 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.client
-            .log_message(MessageType::INFO, "babel-lsp initialized")
-            .await;
+        tracing::info!("babel-lsp initialized");
 
         // Spin up the debounced catalog-rebuild task (REQ-CAT-08).
         let (rebuild_tx, mut rebuild_rx) = watch::channel(());
@@ -839,6 +837,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        tracing::debug!(uri = params.text_document.uri.as_str(), "did_open");
         let uri = params.text_document.uri.clone();
         {
             let lock = self.state.doc_lock(&uri);
@@ -877,6 +876,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        tracing::debug!(uri = params.text_document.uri.as_str(), "did_change");
         let uri = params.text_document.uri;
         let lock = self.state.doc_lock(&uri);
         let _guard = lock.lock().await;
@@ -916,6 +916,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        tracing::debug!(uri = params.text_document.uri.as_str(), "did_save");
         let uri = params.text_document.uri;
         let lock = self.state.doc_lock(&uri);
         let _guard = lock.lock().await;
@@ -947,6 +948,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        tracing::debug!(uri = params.text_document.uri.as_str(), "did_close");
         let uri = params.text_document.uri;
         let lock = self.state.doc_lock(&uri);
         let _guard = lock.lock().await;
