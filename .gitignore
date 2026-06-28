@@ -1,6 +1,18 @@
 /target/
+
+# Python artifacts (maturin wheel builds)
 __pycache__/
 *.pyc
+*.pyd
+dist/
+*.egg-info/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
 
 # Beads / Dolt files (added by bd init)
 .dolt/
