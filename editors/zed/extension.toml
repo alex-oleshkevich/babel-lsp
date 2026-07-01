@@ -1,6 +1,6 @@
 id = "babel-lsp"
 name = "Babel LSP"
-version = "0.1.0"
+version = "0.1.1"
 schema_version = 1
 authors = ["Alex Oleshkevich <alex.oleshkevich@gmail.com>"]
 description = "Language server for Python Babel i18n: diagnostics, completion, and hover for .po/.pot catalogs"
