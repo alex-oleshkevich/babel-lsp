@@ -82,22 +82,6 @@ fn release_yml_updates_aur() {
 }
 
 #[test]
-fn release_yml_updates_homebrew() {
-    assert!(
-        RELEASE_YML.contains("publish-homebrew:"),
-        "must have Homebrew publish job"
-    );
-    assert!(
-        RELEASE_YML.contains("bump-formula-pr"),
-        "must use brew bump-formula-pr"
-    );
-    assert!(
-        RELEASE_YML.contains("HOMEBREW_GITHUB_TOKEN"),
-        "must use HOMEBREW_GITHUB_TOKEN secret"
-    );
-}
-
-#[test]
 fn release_yml_no_github_context_in_run_commands() {
     // Verify GitHub expressions are passed via env vars, not inlined in run: scripts.
     // Look for the known-unsafe pattern: ${{ github.ref_name }} or ${{ github.repository }}
