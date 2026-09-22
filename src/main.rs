@@ -81,5 +81,11 @@ async fn run_lsp() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     let (service, socket) = LspService::new(Backend::new);
-    Server::new(stdin, stdout, socket).serve(service).await;
+    // Default concurrency (4) is too low for rapid typing: each didChange notification
+    // holds its slot until diagnostics are published, so a keystroke burst can
+    // saturate the pool and stall the stdin read loop for every other request.
+    Server::new(stdin, stdout, socket)
+        .concurrency_level(32)
+        .serve(service)
+        .await;
 }

@@ -21,6 +21,9 @@ use crate::features::{
 use crate::state::{DocumentState, WorkspaceState};
 use crate::util::{PositionEncoding, lsp_pos_to_char_offset};
 
+/// `Clone` is cheap (both fields are already `Arc`-backed) and used to hand a
+/// handle to spawned diagnostics tasks — see `did_open`/`did_change`.
+#[derive(Clone)]
 pub struct Backend {
     client: Client,
     state: Arc<WorkspaceState>,
@@ -838,81 +841,100 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         tracing::debug!(uri = params.text_document.uri.as_str(), "did_open");
-        let uri = params.text_document.uri.clone();
-        {
-            let lock = self.state.doc_lock(&uri);
+        // Diagnostics compute + publish is a client round-trip; run the whole
+        // per-URI-locked sequence off the request-handling concurrency slot
+        // (tower-lsp defaults to 4 concurrent requests/notifications) so a
+        // burst of opens/edits can't stall the server.
+        let backend = self.clone();
+        tokio::spawn(async move {
+            let uri = params.text_document.uri.clone();
+            let lock = backend.state.doc_lock(&uri);
             let _guard = lock.lock().await;
             let doc = DocumentState {
                 rope: Rope::from_str(&params.text_document.text),
                 version: params.text_document.version,
             };
-            self.state.documents.insert(uri.clone(), doc);
-        }
-        // REQ-ARCH-10: every opened file receives an immediate publish.
-        // Note: the first call to did_open may use Config::default() if the
-        // initialized() workspace scan has not finished yet. Diagnostics will be
-        // corrected once the scan completes and triggers a rebuild.
-        let config = self.state.config.read().await;
-        let index = self.state.catalog_index.read().await;
-        let diags = if is_catalog_uri(&uri) {
-            let Some(path) = uri.to_file_path() else {
-                return;
+            backend.state.documents.insert(uri.clone(), doc);
+
+            // REQ-ARCH-10: every opened file receives an immediate publish.
+            // Note: the first call to did_open may use Config::default() if the
+            // initialized() workspace scan has not finished yet. Diagnostics will be
+            // corrected once the scan completes and triggers a rebuild.
+            let config = backend.state.config.read().await;
+            let index = backend.state.catalog_index.read().await;
+            let diags = if is_catalog_uri(&uri) {
+                let Some(path) = uri.to_file_path() else {
+                    return;
+                };
+                let file_entries = index.entries_for_file(&path);
+                diagnostics::check_catalog(&file_entries, &uri, &index)
+            } else {
+                let calls = extract_calls(&params.text_document.text, &uri, &config);
+                diagnostics::check_source(&calls, &index)
             };
-            let file_entries = index.entries_for_file(&path);
-            diagnostics::check_catalog(&file_entries, &uri, &index)
-        } else {
-            let calls = extract_calls(&params.text_document.text, &uri, &config);
-            diagnostics::check_source(&calls, &index)
-        };
-        let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
-        let filtered = if !is_catalog_uri(&uri) {
-            diagnostics::apply_noqa(filtered, &params.text_document.text)
-        } else {
-            filtered
-        };
-        drop(index);
-        drop(config);
-        self.client.publish_diagnostics(uri, filtered, None).await;
+            let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
+            let filtered = if !is_catalog_uri(&uri) {
+                diagnostics::apply_noqa(filtered, &params.text_document.text)
+            } else {
+                filtered
+            };
+            drop(index);
+            drop(config);
+            backend
+                .client
+                .publish_diagnostics(uri, filtered, None)
+                .await;
+        });
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         tracing::debug!(uri = params.text_document.uri.as_str(), "did_change");
         let uri = params.text_document.uri;
-        let lock = self.state.doc_lock(&uri);
-        let _guard = lock.lock().await;
-
+        let version = params.text_document.version;
+        let content_changes = params.content_changes;
         let enc = if self.state.is_utf8_encoding() {
             PositionEncoding::Utf8
         } else {
             PositionEncoding::Utf16
         };
+        // Diagnostics compute + publish is a client round-trip; run the whole
+        // per-URI-locked sequence off the request-handling concurrency slot
+        // (see did_open). The per-URI lock still serializes edits in arrival order.
+        let backend = self.clone();
+        tokio::spawn(async move {
+            let lock = backend.state.doc_lock(&uri);
+            let _guard = lock.lock().await;
 
-        if let Some(mut doc) = self.state.documents.get_mut(&uri) {
-            doc.version = params.text_document.version;
-            for change in params.content_changes {
-                apply_change(&mut doc.rope, change, enc);
+            if let Some(mut doc) = backend.state.documents.get_mut(&uri) {
+                doc.version = version;
+                for change in content_changes {
+                    apply_change(&mut doc.rope, change, enc);
+                }
             }
-        }
 
-        if is_catalog_uri(&uri) {
-            self.state.trigger_rebuild();
-        } else if let Some(doc) = self.state.documents.get(&uri) {
-            let text = doc.rope.to_string();
-            drop(doc);
-            let config = self.state.config.read().await;
-            let index = self.state.catalog_index.read().await;
-            let calls = extract_calls(&text, &uri, &config);
-            let diags = diagnostics::check_source(&calls, &index);
-            let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
-            let filtered = diagnostics::apply_noqa(filtered, &text);
-            drop(index);
-            drop(config);
-            self.client.publish_diagnostics(uri, filtered, None).await;
-        } else {
-            // URI is unknown (document was closed before this change arrived).
-            // Publish an empty list to clear any stale diagnostics.
-            self.client.publish_diagnostics(uri, vec![], None).await;
-        }
+            if is_catalog_uri(&uri) {
+                backend.state.trigger_rebuild();
+            } else if let Some(doc) = backend.state.documents.get(&uri) {
+                let text = doc.rope.to_string();
+                drop(doc);
+                let config = backend.state.config.read().await;
+                let index = backend.state.catalog_index.read().await;
+                let calls = extract_calls(&text, &uri, &config);
+                let diags = diagnostics::check_source(&calls, &index);
+                let filtered = diagnostics::apply_diag_filter(diags, &config.diagnostics);
+                let filtered = diagnostics::apply_noqa(filtered, &text);
+                drop(index);
+                drop(config);
+                backend
+                    .client
+                    .publish_diagnostics(uri, filtered, None)
+                    .await;
+            } else {
+                // URI is unknown (document was closed before this change arrived).
+                // Publish an empty list to clear any stale diagnostics.
+                backend.client.publish_diagnostics(uri, vec![], None).await;
+            }
+        });
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
